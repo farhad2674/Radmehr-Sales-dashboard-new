@@ -1,0 +1,5 @@
+{
+  "name": "ChequeFlow Analytics",
+  "description": "Advanced sales dashboard for analyzing future cheque liquidity, counting, and anomaly detection based on Excel data.",
+  "requestFramePermissions": []
+}
