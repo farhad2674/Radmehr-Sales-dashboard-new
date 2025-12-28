@@ -62,7 +62,7 @@ function App() {
   const filterRef = useRef<HTMLDivElement>(null);
 
   // Sorting State
-  const [sortConfig, setSortConfig] = useState<{ key: keyof Cheque; direction: 'asc' | 'desc' } | null>(null);
+  const [sortConfig, setSortConfig] = useState<{ key: keyof Cheque; direction: 'asc' | 'desc' } | null>({ key: 'dueDate', direction: 'asc' });
 
   // Chart Range Filter
   const [chartRange, setChartRange] = useState<number>(9);
@@ -426,7 +426,7 @@ function App() {
               <div className="space-y-6 text-center">
                 <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4">
                   <p className="text-emerald-400 font-bold mb-1">داشبورد با موفقیت ذخیره شد!</p>
-                  <p className="text-slate-400 text-xs">شناسه زیر را برای همکار خود ارسال کنید.</p>
+                  <p className="text-slate-400 text-xs">شناسه ۵ رقمی زیر را برای همکار خود ارسال کنید.</p>
                 </div>
 
                 <div className="space-y-2">
@@ -483,7 +483,7 @@ function App() {
                   type="text" 
                   value={loadId}
                   onChange={(e) => setLoadId(e.target.value)}
-                  placeholder="شناسه دریافتی را وارد کنید"
+                  placeholder="شناسه ۵ رقمی دریافتی (مثلا: 12345)"
                   className="w-full bg-slate-900 border border-slate-600 rounded-xl py-3 px-4 text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-left dir-ltr"
                 />
               </div>
@@ -664,8 +664,8 @@ function App() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <StatsWidget 
                 title="مجموع مبالغ آتی" 
-                value={formatCurrency(analytics.totalFutureAmount)}
-                subValue="تومان"
+                value={filterUser ? formatCurrency(analytics.totalFutureAmount) : '---'}
+                subValue={filterUser ? "ریال" : "برای نمایش، نام را فیلتر کنید"}
                 icon={Wallet} 
                 color="emerald" 
               />
@@ -679,7 +679,7 @@ function App() {
               <StatsWidget 
                 title="بزرگترین پرداخت‌کننده" 
                 value={analytics.topPayer.name} 
-                subValue={`مبلغ: ${formatCurrency(analytics.topPayer.amount)}`}
+                subValue={`مبلغ: ${formatCurrency(analytics.topPayer.amount)} ریال`}
                 icon={User} 
                 color="violet" 
               />
@@ -865,7 +865,7 @@ function App() {
                         onClick={() => handleSort('amount')}
                       >
                         <div className="flex items-center gap-2">
-                          مبلغ (تومان)
+                          مبلغ (ریال)
                           {sortConfig?.key === 'amount' ? (
                             sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-400" /> : <ArrowDown size={14} className="text-emerald-400" />
                           ) : (
@@ -916,7 +916,7 @@ function App() {
                             <p className="text-white font-bold text-lg">{cheque.receivedFrom}</p>
                           </div>
                            <div className="text-left">
-                            <p className="text-xs text-slate-500 mb-1">مبلغ (تومان)</p>
+                            <p className="text-xs text-slate-500 mb-1">مبلغ (ریال)</p>
                             <p className="text-emerald-400 font-bold text-lg font-mono">{formatCurrency(cheque.amount)}</p>
                           </div>
                         </div>

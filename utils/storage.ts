@@ -1,7 +1,9 @@
 import CryptoJS from 'crypto-js';
 import { Cheque } from '../types';
 
-const API_URL = 'https://jsonblob.com/api/jsonBlob';
+// Using ExtendsClass JSON Storage as a simulation of a database that allows custom keys.
+// In a production environment, this should be replaced with your own backend API.
+const API_BASE_URL = 'https://extendsclass.com/api/json-storage/bin';
 
 interface SharePayload {
   content: string; // Encrypted string
@@ -9,7 +11,12 @@ interface SharePayload {
   timestamp: number;
 }
 
-// Save and Encrypt
+// Generate a random 5-digit ID (10000 - 99999)
+const generateFiveDigitId = (): string => {
+    return Math.floor(10000 + Math.random() * 90000).toString();
+};
+
+// Save and Encrypt with Unique 5-digit ID
 export const saveSharedDashboard = async (data: Cheque[], passcode: string): Promise<string> => {
     try {
         const jsonString = JSON.stringify(data);
@@ -22,42 +29,51 @@ export const saveSharedDashboard = async (data: Cheque[], passcode: string): Pro
             timestamp: Date.now()
         };
         
-        const body = JSON.stringify(payload);
-
-        // Check payload size (Safety check ~1MB)
-        if (body.length > 1024 * 1024) {
-            throw new Error('حجم داده‌ها بیش از حد مجاز برای اشتراک‌گذاری است (محدودیت ۱ مگابایت)');
-        }
-        
-        const response = await fetch(API_URL, {
-            method: 'POST',
-            mode: 'cors',
-            credentials: 'omit', // Prevent sending cookies/auth which might trigger CORS issues
-            referrerPolicy: 'no-referrer', // Privacy and avoid referrer blocks
-            headers: { 
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: body
-        });
-
-        if (!response.ok) {
-            throw new Error(`خطای سرور ذخیره‌سازی: ${response.status}`);
+        // Safety check for size (~2MB limit for most free JSON bins)
+        if (JSON.stringify(payload).length > 2 * 1024 * 1024) {
+             throw new Error('حجم داده‌ها بیش از حد مجاز است');
         }
 
-        // Location header contains the URL: https://jsonblob.com/api/jsonBlob/<uuid>
-        // Sometimes exposed as x-jsonblob in certain CORS configs or just Location
-        const location = response.headers.get('Location') || response.headers.get('x-jsonblob');
+        let attempts = 0;
+        const maxAttempts = 5;
+
+        // Try to find a free 5-digit ID
+        while (attempts < maxAttempts) {
+            const id = generateFiveDigitId();
+            
+            try {
+                // 1. Check if ID exists
+                const checkRes = await fetch(`${API_BASE_URL}/${id}`, { 
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                });
+
+                if (checkRes.status === 404) {
+                    // 2. ID is available, try to reserve/save
+                    const saveRes = await fetch(`${API_BASE_URL}/${id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (saveRes.ok) {
+                        return id;
+                    }
+                }
+            } catch (innerErr) {
+                // Ignore individual attempt errors and retry
+                console.warn(`Attempt for ID ${id} failed`, innerErr);
+            }
+            
+            attempts++;
+        }
         
-        if (!location) throw new Error('شناسه اشتراک‌گذاری در پاسخ سرور یافت نشد');
-        
-        const id = location.split('/').pop();
-        return id || '';
+        throw new Error('سیستم قادر به ایجاد شناسه یکتا نبود. لطفا مجددا تلاش کنید.');
+
     } catch (error: any) {
         console.error("Storage Error:", error);
-        // Normalize common fetch errors
         if (error.name === 'TypeError' && (error.message === 'Failed to fetch' || error.message.includes('NetworkError'))) {
-            throw new Error('خطا در اتصال به سرور. لطفا اتصال اینترنت، VPN یا تنظیمات شبکه خود را بررسی کنید.');
+            throw new Error('خطا در اتصال به پایگاه داده. لطفا اینترنت خود را بررسی کنید.');
         }
         throw error;
     }
@@ -66,14 +82,13 @@ export const saveSharedDashboard = async (data: Cheque[], passcode: string): Pro
 // Load and Decrypt
 export const loadSharedDashboard = async (id: string, passcode: string): Promise<Cheque[]> => {
     try {
-        const response = await fetch(`${API_URL}/${id}`, {
-            mode: 'cors',
-            credentials: 'omit',
-            referrerPolicy: 'no-referrer'
+        const response = await fetch(`${API_BASE_URL}/${id}`, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
         });
 
         if (!response.ok) {
-            if (response.status === 404) throw new Error('داشبوردی با این شناسه یافت نشد');
+            if (response.status === 404) throw new Error('داشبوردی با این شناسه ۵ رقمی یافت نشد');
             throw new Error(`خطای دریافت اطلاعات: ${response.status}`);
         }
         
@@ -97,7 +112,7 @@ export const loadSharedDashboard = async (id: string, passcode: string): Promise
     } catch (error: any) {
         console.error("Load Error:", error);
         if (error.name === 'TypeError' && (error.message === 'Failed to fetch' || error.message.includes('NetworkError'))) {
-            throw new Error('خطا در اتصال به سرور. لطفا اتصال اینترنت خود را بررسی کنید.');
+            throw new Error('خطا در اتصال به پایگاه داده. لطفا اینترنت خود را بررسی کنید.');
         }
         throw error;
     }

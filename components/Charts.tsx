@@ -65,115 +65,123 @@ export const LiquidityChart: React.FC<ChartProps> = ({ data }) => {
   };
 
   return (
-    <div className="h-[350px] w-full bg-slate-800/50 p-4 rounded-2xl border border-slate-700 shadow-xl">
-      <h3 className="text-lg font-bold text-slate-100 mb-6 border-r-4 border-emerald-500 pr-3">
+    <div className="h-[350px] w-full bg-slate-800/50 p-4 rounded-2xl border border-slate-700 shadow-xl flex flex-col">
+      <h3 className="text-lg font-bold text-slate-100 mb-6 border-r-4 border-emerald-500 pr-3 shrink-0">
         پیش‌بینی نقدینگی ماهانه (آینده)
       </h3>
-      <ResponsiveContainer width="100%" height="85%">
-        <BarChart data={data} margin={{ top: 20, right: 10, left: 10, bottom: 0 }}>
-          <defs>
-            <linearGradient id="colorAmount" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#10b981" stopOpacity={0.9}/>
-              <stop offset="95%" stopColor="#059669" stopOpacity={0.6}/>
-            </linearGradient>
-            <filter id="shadow" height="200%">
-              <feDropShadow dx="2" dy="2" stdDeviation="2" floodColor="#000" floodOpacity="0.3"/>
-            </filter>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-          <XAxis 
-            dataKey="month" 
-            stroke="#94a3b8" 
-            tick={{ fill: '#94a3b8', fontSize: 12 }} 
-            axisLine={false}
-            tickLine={false}
-            tickFormatter={(val) => toPersianDigits(val.split('/')[1])} 
-          />
-          <YAxis 
-            orientation="right"
-            stroke="#94a3b8" 
-            tick={{ fill: '#94a3b8', fontSize: 10 }} 
-            tickFormatter={formatYAxis}
-            axisLine={false}
-            tickLine={false}
-            width={40}
-          />
-          <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
-          <Bar 
-            dataKey="totalAmount" 
-            fill="url(#colorAmount)" 
-            radius={[6, 6, 0, 0]} 
-            barSize={40}
-            filter="url(#shadow)"
-          >
-             <LabelList 
+      <div className="flex-1 w-full min-h-0 relative">
+        <div className="absolute inset-0">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} margin={{ top: 20, right: 10, left: 10, bottom: 0 }}>
+              <defs>
+                <linearGradient id="colorAmount" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.9}/>
+                  <stop offset="95%" stopColor="#059669" stopOpacity={0.6}/>
+                </linearGradient>
+                <filter id="shadow" height="200%">
+                  <feDropShadow dx="2" dy="2" stdDeviation="2" floodColor="#000" floodOpacity="0.3"/>
+                </filter>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+              <XAxis 
+                dataKey="month" 
+                stroke="#94a3b8" 
+                tick={{ fill: '#94a3b8', fontSize: 12 }} 
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(val) => toPersianDigits(val.split('/')[1])} 
+              />
+              <YAxis 
+                orientation="right"
+                stroke="#94a3b8" 
+                tick={{ fill: '#94a3b8', fontSize: 10 }} 
+                tickFormatter={formatYAxis}
+                axisLine={false}
+                tickLine={false}
+                width={40}
+              />
+              <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
+              <Bar 
                 dataKey="totalAmount" 
-                position="top" 
-                fill="#cbd5e1" 
-                fontSize={14} 
-                fontWeight="bold"
-                formatter={formatLabel}
-             />
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+                fill="url(#colorAmount)" 
+                radius={[6, 6, 0, 0]} 
+                barSize={40}
+                filter="url(#shadow)"
+              >
+                <LabelList 
+                    dataKey="totalAmount" 
+                    position="top" 
+                    fill="#cbd5e1" 
+                    fontSize={14} 
+                    fontWeight="bold"
+                    formatter={formatLabel}
+                />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
     </div>
   );
 };
 
 export const CountChart: React.FC<ChartProps> = ({ data }) => {
   return (
-    <div className="h-[350px] w-full bg-slate-800/50 p-4 rounded-2xl border border-slate-700 shadow-xl">
-       <h3 className="text-lg font-bold text-slate-100 mb-6 border-r-4 border-blue-500 pr-3">
+    <div className="h-[350px] w-full bg-slate-800/50 p-4 rounded-2xl border border-slate-700 shadow-xl flex flex-col">
+       <h3 className="text-lg font-bold text-slate-100 mb-6 border-r-4 border-blue-500 pr-3 shrink-0">
         روند تعداد چک‌های آتی
       </h3>
-      <ResponsiveContainer width="100%" height="85%">
-        <AreaChart data={data} margin={{ top: 20, right: 10, left: 10, bottom: 0 }}>
-          <defs>
-            <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
-              <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-          <XAxis 
-            dataKey="month" 
-            stroke="#94a3b8" 
-            tick={{ fill: '#94a3b8', fontSize: 12 }}
-            axisLine={false}
-            tickLine={false}
-             tickFormatter={(val) => toPersianDigits(val.split('/')[1])}
-          />
-          <YAxis 
-            orientation="right"
-            stroke="#94a3b8" 
-            tick={{ fill: '#94a3b8', fontSize: 12 }}
-            axisLine={false}
-            tickLine={false}
-            tickFormatter={(val) => toPersianDigits(val)}
-            width={30}
-          />
-          <Tooltip content={<CustomTooltipCount />} />
-          <Area 
-            type="monotone" 
-            dataKey="count" 
-            stroke="#60a5fa" 
-            fillOpacity={1} 
-            fill="url(#colorCount)" 
-            strokeWidth={3}
-          >
-             <LabelList 
+      <div className="flex-1 w-full min-h-0 relative">
+        <div className="absolute inset-0">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: 20, right: 10, left: 10, bottom: 0 }}>
+              <defs>
+                <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
+                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+              <XAxis 
+                dataKey="month" 
+                stroke="#94a3b8" 
+                tick={{ fill: '#94a3b8', fontSize: 12 }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(val) => toPersianDigits(val.split('/')[1])}
+              />
+              <YAxis 
+                orientation="right"
+                stroke="#94a3b8" 
+                tick={{ fill: '#94a3b8', fontSize: 12 }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(val) => toPersianDigits(val)}
+                width={30}
+              />
+              <Tooltip content={<CustomTooltipCount />} />
+              <Area 
+                type="monotone" 
                 dataKey="count" 
-                position="top" 
-                fill="#cbd5e1" 
-                fontSize={14} 
-                fontWeight="bold"
-                offset={10}
-                formatter={(val: number) => val === 0 ? '' : toPersianDigits(val)}
-             />
-          </Area>
-        </AreaChart>
-      </ResponsiveContainer>
+                stroke="#60a5fa" 
+                fillOpacity={1} 
+                fill="url(#colorCount)" 
+                strokeWidth={3}
+              >
+                <LabelList 
+                    dataKey="count" 
+                    position="top" 
+                    fill="#cbd5e1" 
+                    fontSize={14} 
+                    fontWeight="bold"
+                    offset={10}
+                    formatter={(val: number) => val === 0 ? '' : toPersianDigits(val)}
+                />
+              </Area>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
     </div>
   );
 };
