@@ -20,7 +20,11 @@ import {
   Zap,
   Info,
   X,
-  ChevronDown
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
 import { Cheque, MonthlyStats, RawChequeData, AnomalyReport } from './types';
 import { normalizeChequeData, getCurrentJalaliDate, formatCurrency, toPersianDigits } from './utils/helpers';
@@ -74,6 +78,10 @@ function App() {
   // Sorting
   const [sortConfig, setSortConfig] = useState<{ key: keyof Cheque; direction: 'asc' | 'desc' } | null>({ key: 'dueDate', direction: 'asc' });
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
+
   // Chart Range
   const [chartRange, setChartRange] = useState<number>(9);
 
@@ -90,6 +98,11 @@ function App() {
   useEffect(() => {
     setInputId(datasetId);
   }, [datasetId]);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterUser, tableYear, tableMonth, sortConfig, datasetId]);
 
   // Auto-dismiss notification
   useEffect(() => {
@@ -299,6 +312,7 @@ function App() {
     return Array.from(years).sort();
   }, [filteredData]);
 
+  // Full Sorted/Filtered Table Data (before pagination)
   const tableData = useMemo(() => {
     let result = filteredData.filter(item => {
         const y = item.dueDate.substring(0, 4);
@@ -321,6 +335,17 @@ function App() {
     }
     return result;
   }, [filteredData, tableYear, tableMonth, sortConfig]);
+
+  // Pagination Logic
+  const totalPages = Math.ceil(tableData.length / itemsPerPage);
+  const paginatedData = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return tableData.slice(start, start + itemsPerPage);
+  }, [tableData, currentPage, itemsPerPage]);
+
+  const goToPage = (page: number) => {
+    setCurrentPage(Math.min(Math.max(1, page), totalPages));
+  };
 
   const isMonthDisabled = (mVal: string) => {
     if (tableYear === 'all') {
@@ -829,10 +854,19 @@ function App() {
                   </div>
                 </div>
 
-                <span className="text-slate-400 text-xs sm:text-sm self-end sm:self-auto">{toPersianDigits(tableData.length)} رکورد نمایش داده شده</span>
+                <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                   <span className="text-slate-400 text-xs sm:text-sm self-end sm:self-auto">
+                     {toPersianDigits(tableData.length)} رکورد یافت شد
+                   </span>
+                   {tableData.length > 0 && (
+                      <span className="text-emerald-400 text-xs sm:text-sm bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                         صفحه {toPersianDigits(currentPage)} از {toPersianDigits(totalPages)}
+                      </span>
+                   )}
+                </div>
               </div>
               
-              <div className="hidden md:block overflow-x-auto max-h-[500px] overflow-y-auto rounded-b-2xl custom-scrollbar">
+              <div className="hidden md:block overflow-x-auto min-h-[400px] rounded-b-2xl custom-scrollbar relative">
                 <table className="w-full text-right">
                   <thead className="bg-slate-900/50 text-slate-400 sticky top-0 z-10 backdrop-blur-md">
                     <tr>
@@ -872,9 +906,9 @@ function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-700/50">
-                    {tableData.length > 0 ? (
-                      tableData.map((cheque) => (
-                        <tr key={cheque.id} className="hover:bg-slate-700/30 transition-colors group">
+                    {paginatedData.length > 0 ? (
+                      paginatedData.map((cheque) => (
+                        <tr key={cheque.id} className="hover:bg-slate-700/30 transition-colors group animate-in fade-in duration-300">
                           <td className="px-6 py-4 text-slate-300 font-mono text-sm">{toPersianDigits(cheque.docNumber)}</td>
                           <td className="px-6 py-4 text-white font-medium">{cheque.receivedFrom}</td>
                           <td className="px-6 py-4 text-emerald-400 font-mono dir-ltr text-right">{toPersianDigits(cheque.dueDate)}</td>
@@ -898,10 +932,10 @@ function App() {
                 </table>
               </div>
 
-              <div className="md:hidden max-h-[500px] overflow-y-auto p-4 space-y-4">
-                 {tableData.length > 0 ? (
-                    tableData.map((cheque) => (
-                      <div key={cheque.id} className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl space-y-4 shadow-sm">
+              <div className="md:hidden min-h-[300px] p-4 space-y-4">
+                 {paginatedData.length > 0 ? (
+                    paginatedData.map((cheque) => (
+                      <div key={cheque.id} className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl space-y-4 shadow-sm animate-in fade-in duration-300">
                         <div className="flex justify-between items-start">
                           <div>
                             <p className="text-xs text-slate-500 mb-1">دریافت از</p>
@@ -943,6 +977,74 @@ function App() {
                     </div>
                  )}
               </div>
+
+              {/* Pagination Controls */}
+              {tableData.length > 0 && (
+                <div className="border-t border-slate-700 bg-slate-800/80 p-4 rounded-b-2xl flex flex-col sm:flex-row items-center justify-between gap-4 backdrop-blur-md">
+                   
+                   <div className="flex items-center gap-3">
+                      <span className="text-sm text-slate-400">تعداد در صفحه:</span>
+                      <div className="relative">
+                        <select 
+                          value={itemsPerPage}
+                          onChange={(e) => {
+                             setItemsPerPage(Number(e.target.value));
+                             setCurrentPage(1);
+                          }}
+                          className="bg-slate-900 border border-slate-600 text-slate-200 rounded-lg px-3 py-1 text-sm appearance-none focus:border-emerald-500 focus:outline-none pr-8"
+                        >
+                          <option value={20}>۲۰</option>
+                          <option value={50}>۵۰</option>
+                          <option value={100}>۱۰۰</option>
+                          <option value={500}>۵۰۰</option>
+                        </select>
+                        <ChevronDown size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                      </div>
+                   </div>
+
+                   <div className="flex items-center gap-1 sm:gap-2">
+                      <button 
+                        onClick={() => goToPage(1)} 
+                        disabled={currentPage === 1}
+                        className="p-2 rounded-lg hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-300 transition-colors"
+                        title="صفحه اول"
+                      >
+                        <ChevronsRight size={20} />
+                      </button>
+                      <button 
+                        onClick={() => goToPage(currentPage - 1)} 
+                        disabled={currentPage === 1}
+                        className="p-2 rounded-lg hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-300 transition-colors"
+                        title="صفحه قبل"
+                      >
+                        <ChevronRight size={20} />
+                      </button>
+                      
+                      <div className="px-4 py-1 bg-slate-900 rounded-lg border border-slate-700 min-w-[100px] text-center">
+                         <span className="text-emerald-400 font-bold font-mono">{toPersianDigits(currentPage)}</span>
+                         <span className="text-slate-500 mx-2">/</span>
+                         <span className="text-slate-400 font-mono">{toPersianDigits(totalPages)}</span>
+                      </div>
+
+                      <button 
+                        onClick={() => goToPage(currentPage + 1)} 
+                        disabled={currentPage === totalPages}
+                        className="p-2 rounded-lg hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-300 transition-colors"
+                        title="صفحه بعد"
+                      >
+                        <ChevronLeft size={20} />
+                      </button>
+                      <button 
+                        onClick={() => goToPage(totalPages)} 
+                        disabled={currentPage === totalPages}
+                        className="p-2 rounded-lg hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent text-slate-300 transition-colors"
+                        title="صفحه آخر"
+                      >
+                        <ChevronsLeft size={20} />
+                      </button>
+                   </div>
+                </div>
+              )}
             </div>
           </div>
         )}
