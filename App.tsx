@@ -57,6 +57,7 @@ function App() {
   const [data, setData] = useState<Cheque[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('در حال پردازش...');
+  const [progress, setProgress] = useState(0); // Add progress state
   const [filterUser, setFilterUser] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [currentDate] = useState(getCurrentJalaliDate()); 
@@ -102,6 +103,7 @@ function App() {
     if (!targetId) return;
 
     setLoading(true);
+    setProgress(0); // Indeterminate or just loading
     setLoadingText('در حال دریافت اطلاعات از سرور...');
 
     try {
@@ -142,62 +144,88 @@ function App() {
 
     const newId = generateDatasetId();
     setLoading(true);
-    setLoadingText('در حال آنالیز و ذخیره در دیتابیس...');
+    setProgress(0);
+    setLoadingText('در حال خواندن فایل...');
 
-    setTimeout(() => {
-      const reader = new FileReader();
-      reader.onload = async (evt) => {
-        try {
-          const bstr = evt.target?.result;
-          const wb = XLSX.read(bstr, { type: 'binary' });
-          const wsname = wb.SheetNames[0];
-          const ws = wb.Sheets[wsname];
-          const jsonData = XLSX.utils.sheet_to_json<RawChequeData>(ws);
+    // Use FileReader with progress event
+    const reader = new FileReader();
+    
+    reader.onprogress = (event) => {
+      if (event.lengthComputable) {
+        // Map file reading to 0-30%
+        const percent = Math.round((event.loaded / event.total) * 30);
+        setProgress(percent);
+      }
+    };
 
-          const normalized = jsonData
-            .map((row, index) => normalizeChequeData(row, index))
-            .filter((item): item is Cheque => item !== null)
-            .map((item, idx) => ({
-                ...item,
-                id: `${newId}-${idx}`
-            }));
+    reader.onload = async (evt) => {
+      try {
+        setLoadingText('در حال پردازش داده‌ها...');
+        setProgress(35);
+        // Small delay to allow UI render
+        await new Promise(r => setTimeout(r, 100));
 
-          if (normalized.length === 0) {
-            throw new Error("هیچ داده معتبری در فایل یافت نشد.");
-          }
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const jsonData = XLSX.utils.sheet_to_json<RawChequeData>(ws);
 
-          // Upload to Server (No Local Fallback)
-          // Pass filename as well
-          await syncCheques('', normalized, newId, file.name);
-          
-          // Update State
-          setDatasetId(newId);
-          localStorage.setItem('cheque_dataset_id', newId);
-          
-          // Refresh Data from DB using new ID
-          await refreshData(newId);
-          
-          if (fileInputRef.current) fileInputRef.current.value = '';
-          
-          setNotification({
-            type: 'success',
-            message: 'عملیات موفق',
-            subMessage: `تمام رکوردها در دیتابیس ذخیره شدند. شناسه: ${newId}`
-          });
+        setProgress(45);
 
-        } catch (error: any) {
-          console.error("Error processing file:", error);
-          setNotification({
-            type: 'error',
-            message: 'خطا در بارگذاری',
-            subMessage: error.message || 'مشکلی در ارتباط با سرور وجود دارد'
-          });
-        } finally {
-          setLoading(false);
+        const normalized = jsonData
+          .map((row, index) => normalizeChequeData(row, index))
+          .filter((item): item is Cheque => item !== null)
+          .map((item, idx) => ({
+              ...item,
+              id: `${newId}-${idx}`
+          }));
+
+        if (normalized.length === 0) {
+          throw new Error("هیچ داده معتبری در فایل یافت نشد.");
         }
-      };
-      reader.readAsBinaryString(file);
-    }, 100);
+
+        setProgress(50);
+        setLoadingText('در حال ارسال به سرور...');
+
+        // Upload to Server (No Local Fallback)
+        // Pass callback to track upload progress (mapped to 50-100%)
+        await syncCheques('', normalized, newId, file.name, (uploadPercent) => {
+          const totalPercent = 50 + Math.round(uploadPercent * 0.5);
+          setProgress(totalPercent);
+        });
+        
+        setProgress(100);
+        setLoadingText('تکمیل شد!');
+        
+        // Update State
+        setDatasetId(newId);
+        localStorage.setItem('cheque_dataset_id', newId);
+        
+        // Refresh Data from DB using new ID
+        await refreshData(newId);
+        
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        
+        setNotification({
+          type: 'success',
+          message: 'عملیات موفق',
+          subMessage: `تمام رکوردها در دیتابیس ذخیره شدند. شناسه: ${newId}`
+        });
+
+      } catch (error: any) {
+        console.error("Error processing file:", error);
+        setNotification({
+          type: 'error',
+          message: 'خطا در بارگذاری',
+          subMessage: error.message || 'مشکلی در ارتباط با سرور وجود دارد'
+        });
+      } finally {
+        setLoading(false);
+        setProgress(0);
+      }
+    };
+    reader.readAsBinaryString(file);
   };
 
   const handleLoadDataset = () => {
@@ -409,9 +437,26 @@ function App() {
             </div>
           </div>
           <h2 className="text-xl sm:text-2xl font-bold text-white tracking-wide mb-2 animate-pulse leading-snug">{loadingText}</h2>
-          <p className="text-cyan-500/80 font-mono text-sm tracking-wider animate-pulse">
-             CONNECTING TO POSTGRES...
-          </p>
+          
+          {progress > 0 && (
+            <div className="flex flex-col items-center w-full max-w-sm">
+              <div className="w-full h-3 bg-slate-800 rounded-full mt-4 overflow-hidden border border-slate-700 relative shadow-inner">
+                <div 
+                    className="h-full bg-gradient-to-r from-cyan-500 to-blue-600 transition-all duration-300 ease-out relative"
+                    style={{ width: `${progress}%` }}
+                >
+                    <div className="absolute inset-0 bg-white/30 animate-[shimmer_1.5s_infinite] skew-x-[-20deg]"></div>
+                </div>
+              </div>
+              <p className="mt-2 text-cyan-400 font-mono text-sm tracking-widest">{progress}%</p>
+            </div>
+          )}
+          
+          {progress === 0 && (
+            <p className="text-cyan-500/80 font-mono text-sm tracking-wider animate-pulse">
+               CONNECTING TO SERVER...
+            </p>
+          )}
         </div>
       )}
 

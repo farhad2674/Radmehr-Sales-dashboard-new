@@ -27,28 +27,43 @@ export const fetchCheques = async (baseUrl: string, datasetId?: string): Promise
   }
 };
 
-export const syncCheques = async (baseUrl: string, data: Cheque[], datasetId: string, filename: string): Promise<{ success: boolean }> => {
-  try {
-    const response = await fetch(`${BASE_API_URL}/api/cheques/bulk`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        cheques: data, 
-        datasetId: datasetId,
-        filename: filename 
-      }),
-    });
+export const syncCheques = async (
+  baseUrl: string, 
+  data: Cheque[], 
+  datasetId: string, 
+  filename: string,
+  onProgress?: (percentage: number) => void
+): Promise<{ success: boolean }> => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE_API_URL}/api/cheques/bulk`);
+    xhr.setRequestHeader('Content-Type', 'application/json');
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Server rejected data:", errorText);
-      throw new Error(`خطای سرور: ${errorText}`);
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percentComplete = Math.round((event.loaded / event.total) * 100);
+          onProgress(percentComplete);
+        }
+      };
     }
-    
-    return { success: true };
 
-  } catch (error: any) {
-    console.error("Sync failed:", error);
-    throw new Error("خطا در ارسال به سرور. لطفاً اتصال اینترنت یا سرور را بررسی کنید.");
-  }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve({ success: true });
+      } else {
+        reject(new Error(`خطای سرور: ${xhr.responseText}`));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error("خطا در ارسال به سرور. لطفاً اتصال اینترنت یا سرور را بررسی کنید."));
+    };
+
+    xhr.send(JSON.stringify({ 
+      cheques: data, 
+      datasetId: datasetId, 
+      filename: filename 
+    }));
+  });
 };
