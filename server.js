@@ -1,8 +1,13 @@
-const express = require('express');
-const path = require('path');
-const cors = require('cors');
-const fs = require('fs');
-const Database = require('better-sqlite3');
+import express from 'express';
+import path from 'path';
+import cors from 'cors';
+import fs from 'fs';
+import Database from 'better-sqlite3';
+import { fileURLToPath } from 'url';
+
+// Reconstruct __dirname for ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 
