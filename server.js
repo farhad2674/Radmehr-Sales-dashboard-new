@@ -16,15 +16,12 @@ if (!dbUrl) {
 }
 
 // Detect if we are using an internal Railway URL (postgres.railway.internal)
-// Internal connections inside Railway's private network usually require SSL to be disabled or handled differently than public connections.
 const isRailwayInternal = dbUrl && dbUrl.includes('railway.internal');
 
 console.log(`Database Config: ${dbUrl ? 'URL Set' : 'URL Missing'} | Mode: ${isRailwayInternal ? 'Railway Internal' : 'Public/Standard'}`);
 
 const pool = new Pool({
   connectionString: dbUrl,
-  // If internal, disable SSL to prevent "server does not support SSL" errors.
-  // If public (e.g. connecting from local to cloud), strictly require valid SSL.
   ssl: dbUrl ? (isRailwayInternal ? false : { rejectUnauthorized: false }) : undefined
 });
 
@@ -39,9 +36,6 @@ pool.connect()
   .catch(err => {
     console.error("❌ Failed to connect to database on startup.");
     console.error(`Error: ${err.message}`);
-    if (isRailwayInternal && err.code === 'ENOTFOUND') {
-      console.error("HINT: You are using a 'railway.internal' URL locally. This URL only works when the app is deployed on Railway. For local development, use the Public Proxy URL provided in Railway dashboard.");
-    }
   });
 
 // 2. Initialize Table Schema
@@ -49,6 +43,8 @@ const initDB = async () => {
   let client;
   try {
     client = await pool.connect();
+    
+    // Create Basic Table
     await client.query(`
       CREATE TABLE IF NOT EXISTS cheques (
         id TEXT PRIMARY KEY,
@@ -63,7 +59,27 @@ const initDB = async () => {
       );
       CREATE INDEX IF NOT EXISTS idx_dataset_id ON cheques(dataset_id);
     `);
-    console.log("Database schema verified.");
+
+    // Migrate: Add missing columns if they don't exist (Safe migration)
+    const columnsToAdd = [
+        { name: 'series', type: 'TEXT' },
+        { name: 'operation_date', type: 'TEXT' },
+        { name: 'paid_to', type: 'TEXT' },
+        { name: 'description', type: 'TEXT' }
+    ];
+
+    for (const col of columnsToAdd) {
+        await client.query(`
+            DO $$ 
+            BEGIN 
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='cheques' AND column_name='${col.name}') THEN 
+                    ALTER TABLE cheques ADD COLUMN ${col.name} ${col.type}; 
+                END IF; 
+            END $$;
+        `);
+    }
+
+    console.log("Database schema verified and updated with full Excel columns.");
   } catch (err) {
     console.error("Failed to initialize database schema:", err);
   } finally {
@@ -79,8 +95,21 @@ app.get('/api/cheques', async (req, res) => {
   if (!datasetId) return res.json([]);
   
   try {
+    // Select all columns
     const result = await pool.query(
-      'SELECT id, doc_number as "docNumber", amount, due_date as "dueDate", received_from as "receivedFrom", status, bank FROM cheques WHERE dataset_id = $1 ORDER BY due_date ASC',
+      `SELECT 
+        id, 
+        doc_number as "docNumber", 
+        series,
+        amount, 
+        due_date as "dueDate", 
+        operation_date as "operationDate",
+        received_from as "receivedFrom", 
+        paid_to as "paidTo",
+        status, 
+        bank, 
+        description 
+       FROM cheques WHERE dataset_id = $1 ORDER BY due_date ASC`,
       [datasetId]
     );
     // Convert numeric strings back to numbers
@@ -108,19 +137,33 @@ app.post('/api/cheques/bulk', async (req, res) => {
     await client.query('DELETE FROM cheques WHERE dataset_id = $1', [datasetId]);
     
     const queryText = `
-      INSERT INTO cheques (id, doc_number, amount, due_date, received_from, status, bank, dataset_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO cheques (
+        id, doc_number, series, amount, due_date, operation_date, 
+        received_from, paid_to, status, bank, description, dataset_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     `;
     
     // Insert new records
     for (const c of cheques) {
       await client.query(queryText, [
-        c.id, c.docNumber, c.amount, c.dueDate, c.receivedFrom, c.status, c.bank, datasetId
+        c.id, 
+        c.docNumber, 
+        c.series,
+        c.amount, 
+        c.dueDate, 
+        c.operationDate,
+        c.receivedFrom, 
+        c.paidTo,
+        c.status, 
+        c.bank, 
+        c.description,
+        datasetId
       ]);
     }
 
     await client.query('COMMIT');
-    console.log(`Saved ${cheques.length} records for dataset ${datasetId}`);
+    console.log(`Saved ${cheques.length} records for dataset ${datasetId} (Full Schema)`);
     res.json({ success: true, count: cheques.length });
   } catch (e) {
     if (client) {

@@ -14,11 +14,15 @@ export interface RawChequeData {
 export interface Cheque {
   id: string;
   docNumber: string;
+  series: string;
   amount: number;
   dueDate: string; // YYYY/MM/DD
+  operationDate: string;
   receivedFrom: string;
+  paidTo: string;
   status: string;
   bank: string;
+  description: string;
 }
 
 export interface MonthlyStats {

@@ -15,11 +15,15 @@ export const normalizeChequeData = (row: RawChequeData, index: number): Cheque |
   return {
     id: `row-${index}`,
     docNumber: String(row['شماره اسناد'] || ''),
+    series: String(row['سری'] || ''),
     amount: amount,
     dueDate: String(row['تاریخ سررسید']).trim(),
+    operationDate: String(row['تاریخ عملیات'] || ''),
     receivedFrom: String(row['دریافت از'] || 'نامشخص').trim(),
+    paidTo: String(row['پرداخت به'] || ''),
     status: row['آخرین وضعیت'] || '',
     bank: row['بانک'] || '',
+    description: String(row['توضیحات'] || ''),
   };
 };
 
@@ -28,12 +32,8 @@ export const formatCurrency = (val: number): string => {
   return new Intl.NumberFormat('fa-IR').format(val);
 };
 
-// Get current Jalali date string (Simplified for demo, usually requires a library like jalaali-js)
-// Assuming input data is already correctly formatted YYYY/MM/DD
+// Get current Jalali date string (Simplified for demo)
 export const getCurrentJalaliDate = (): string => {
-    // Ideally use moment-jalaali or similar. Here we default to a hardcoded logic or
-    // for the sake of the demo, let's assume "Today" is roughly 1403/03/01 if not provided.
-    // In a real app, use `new Date().toLocaleDateString('fa-IR')` and format.
     const now = new Date();
     const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: '2-digit', day: '2-digit', calendar: 'persian' };
     const parts = new Intl.DateTimeFormat('en-US-u-ca-persian', options).formatToParts(now);
@@ -44,8 +44,6 @@ export const getCurrentJalaliDate = (): string => {
 };
 
 export const parseExcelDate = (excelDate: any): string => {
-    // If Excel date is a serial number, conversion logic would go here.
-    // Based on screenshot, it looks like text "1403/02/03".
     return String(excelDate);
 };
 
