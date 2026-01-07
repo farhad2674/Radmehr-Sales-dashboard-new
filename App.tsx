@@ -24,7 +24,10 @@ import {
   Copy,
   DownloadCloud,
   Zap,
-  Brain
+  Brain,
+  Settings,
+  Server,
+  ServerCrash
 } from 'lucide-react';
 import { Cheque, MonthlyStats, RawChequeData, AnomalyReport } from './types';
 import { normalizeChequeData, getCurrentJalaliDate, formatCurrency, toPersianDigits } from './utils/helpers';
@@ -47,19 +50,8 @@ const PERSIAN_MONTHS = [
   { value: '12', label: 'اسفند' },
 ];
 
-// Use environment variable if available, otherwise default to relative path
-// Safely check for import.meta.env to avoid "Cannot read properties of undefined"
-const API_BASE_URL = (() => {
-  try {
-    const meta = import.meta as any;
-    return (meta && meta.env && meta.env.VITE_API_URL) || '';
-  } catch (e) {
-    return '';
-  }
-})();
-
 function App() {
-  // Dataset ID Management
+  // --- Dataset State ---
   const [datasetId, setDatasetId] = useState<string>(() => {
     try {
       return localStorage.getItem('cheque_dataset_id') || '';
@@ -95,9 +87,9 @@ function App() {
     if (datasetId) {
       refreshData(datasetId);
     }
-  }, []);
+  }, [datasetId]);
 
-  // Update input when datasetId changes (e.g. after upload)
+  // Update input when datasetId changes
   useEffect(() => {
     setInputId(datasetId);
   }, [datasetId]);
@@ -107,16 +99,14 @@ function App() {
 
     setLoading(true);
     setLoadingText('در حال دریافت اطلاعات از سرور...');
+
     try {
-      const serverData = await fetchCheques(API_BASE_URL, targetId);
+      const serverData = await fetchCheques('', targetId);
       setData(serverData);
     } catch (err: any) {
-      if (err.message && err.message.includes('404')) {
-        console.warn("Backend endpoint not found (404). Assuming empty database.");
-      } else {
-        console.error("Failed to fetch data:", err);
-      }
-      setData([]);
+      console.error("Failed to fetch data:", err);
+      // Don't clear data immediately on error to avoid flashing, but maybe show alert
+      if(data.length === 0) setData([]);
     } finally {
       setLoading(false);
     }
@@ -144,8 +134,7 @@ function App() {
 
     const newId = generateDatasetId();
     setLoading(true);
-    // Updated text for AI analysis
-    setLoadingText('هوش مصنوعی در حال آنالیز داده‌ها...');
+    setLoadingText('در حال آنالیز و ذخیره در دیتابیس...');
 
     setTimeout(() => {
       const reader = new FileReader();
@@ -162,7 +151,7 @@ function App() {
             .filter((item): item is Cheque => item !== null);
 
           // Upload to Server with Unique ID
-          await syncCheques(API_BASE_URL, normalized, newId);
+          await syncCheques('', normalized, newId);
           
           // Update State
           setDatasetId(newId);
@@ -172,7 +161,7 @@ function App() {
           await refreshData(newId);
           
           if (fileInputRef.current) fileInputRef.current.value = '';
-          alert(`فایل با موفقیت آنالیز و آپلود شد.\nشناسه اختصاصی شما: ${newId}`);
+          alert(`فایل با موفقیت آپلود و ذخیره شد.\nشناسه اختصاصی شما: ${newId}`);
 
         } catch (error: any) {
           console.error("Error processing file:", error);
@@ -198,7 +187,6 @@ function App() {
   const copyToClipboard = () => {
     if (datasetId) {
         navigator.clipboard.writeText(datasetId);
-        // Optional: Show toast
     }
   };
 
@@ -350,28 +338,16 @@ function App() {
       {loading && (
         <div className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-xl flex flex-col items-center justify-center transition-all duration-500 px-4 text-center">
           <div className="relative mb-8 scale-75 sm:scale-100">
-            {/* Ambient Background Glow */}
             <div className="absolute inset-0 bg-cyan-500/20 blur-3xl rounded-full animate-pulse"></div>
-            
-            {/* Spinning Rings (Electric Effect) */}
             <div className="absolute -inset-4 border-t-2 border-r-2 border-cyan-400/60 rounded-full animate-spin duration-[1.5s]"></div>
             <div className="absolute -inset-8 border-b-2 border-l-2 border-blue-500/40 rounded-full animate-spin direction-reverse duration-[2s]"></div>
-            <div className="absolute -inset-2 border-2 border-dashed border-emerald-400/30 rounded-full animate-spin-slow"></div>
-
-            {/* Inner Container */}
             <div className="relative z-10 bg-slate-900 p-8 rounded-full border border-slate-700 shadow-[0_0_50px_rgba(6,182,212,0.15)]">
-               <Brain size={80} className="text-cyan-400 animate-pulse drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]" />
-               {/* Spark */}
+               <Database size={80} className="text-cyan-400 animate-pulse drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]" />
                <Zap size={24} className="absolute -top-1 -right-1 text-yellow-400 animate-bounce fill-yellow-400" />
             </div>
           </div>
-          
-          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-wide mb-2 animate-pulse leading-snug">
-            {loadingText}
-          </h2>
-          <p className="text-cyan-500/80 font-mono text-sm tracking-wider animate-pulse">
-            AI PROCESSING ENGINE ACTIVE
-          </p>
+          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-wide mb-2 animate-pulse leading-snug">{loadingText}</h2>
+          <p className="text-cyan-500/80 font-mono text-sm tracking-wider animate-pulse">CONNECTING TO POSTGRES...</p>
         </div>
       )}
 
@@ -387,15 +363,37 @@ function App() {
             </h1>
           </div>
           
-          <div className="flex items-center gap-3">
-            {/* Minimal actions for header */}
+          <div className="flex items-center gap-2 sm:gap-3">
+             
+             {/* Display Dataset ID in Header if active */}
+             {datasetId && !loading && (
+                <div className="hidden md:flex items-center gap-2 px-3 py-2 bg-slate-800/80 border border-slate-700 rounded-xl mr-2 shadow-inner animate-in fade-in slide-in-from-top-4 duration-500">
+                    <span className="text-xs text-slate-400 font-medium">کد گزارش:</span>
+                    <span className="text-sm font-mono font-bold text-emerald-400 tracking-widest border-b border-emerald-500/20 pb-0.5">
+                      {toPersianDigits(datasetId)}
+                    </span>
+                    <button 
+                      onClick={copyToClipboard} 
+                      className="p-1 hover:bg-slate-700 rounded-md transition-colors text-slate-500 hover:text-white"
+                      title="کپی شناسه"
+                    >
+                      <Copy size={12} />
+                    </button>
+                </div>
+             )}
+
+             <div className="flex items-center gap-2 px-3 py-1 bg-violet-900/30 border border-violet-500/30 rounded-full">
+                <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse"></div>
+                <span className="text-xs text-violet-300">Cloud DB</span>
+             </div>
+
              <button 
               onClick={() => fileInputRef.current?.click()}
               disabled={loading}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl transition-all shadow-lg shadow-blue-500/20 text-sm font-medium disabled:opacity-50"
             >
               <UploadCloud size={18} />
-              <span>آپلود جدید</span>
+              <span className="hidden sm:inline">آپلود جدید</span>
             </button>
             <input 
               type="file" 
@@ -412,7 +410,6 @@ function App() {
         
         {/* Central Electric ID Switcher */}
         <div className="relative group w-full max-w-lg mx-auto mb-12 z-20">
-          {/* Electric Glow Effect */}
           <div className="absolute -inset-1 bg-gradient-to-r from-cyan-400 via-emerald-500 to-cyan-400 rounded-2xl blur-lg opacity-40 group-hover:opacity-100 transition duration-1000 group-hover:duration-200 animate-pulse"></div>
           
           <div className="relative flex items-center bg-slate-900 rounded-2xl border border-slate-700/50 p-2 shadow-2xl ring-1 ring-white/10">
@@ -468,13 +465,15 @@ function App() {
                     برای شروع، فایل اکسل خود را آپلود کنید تا یک شناسه اختصاصی دریافت کنید، یا شناسه قبلی خود را در کادر بالا وارد نمایید.
                 </p>
                 
-                <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-10 py-4 rounded-2xl font-bold shadow-xl shadow-blue-500/20 transition-all flex items-center justify-center gap-3 text-lg group"
-                >
-                    <UploadCloud size={24} className="group-hover:scale-110 transition-transform" />
-                    آپلود فایل جدید
-                </button>
+                <div className="flex flex-col gap-3">
+                  <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-10 py-4 rounded-2xl font-bold shadow-xl shadow-blue-500/20 transition-all flex items-center justify-center gap-3 text-lg group"
+                  >
+                      <UploadCloud size={24} className="group-hover:scale-110 transition-transform" />
+                      آپلود فایل جدید
+                  </button>
+                </div>
              </div>
 
              {/* Background Decoration */}
