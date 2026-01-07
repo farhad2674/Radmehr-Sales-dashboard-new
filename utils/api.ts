@@ -1,11 +1,12 @@
 import { Cheque } from '../types';
 
 export const fetchCheques = async (baseUrl: string, datasetId?: string): Promise<Cheque[]> => {
-  // Ensure no trailing slash
+  // 1. If no datasetId is provided, return empty
+  if (!datasetId) return [];
+
+  // 2. Prepare URL (handle relative or absolute)
   const url = baseUrl ? baseUrl.replace(/\/$/, '') : '';
-  
-  // Build query string
-  const query = datasetId ? `?datasetId=${datasetId}` : '';
+  const query = `?datasetId=${datasetId}`;
 
   try {
     const response = await fetch(`${url}/api/cheques${query}`, {
@@ -17,24 +18,28 @@ export const fetchCheques = async (baseUrl: string, datasetId?: string): Promise
     });
 
     if (!response.ok) {
-      throw new Error(`Error ${response.status}: ${response.statusText}`);
+      // If 404, it might mean the dataset ID doesn't exist in Postgres yet
+      if (response.status === 404) {
+        return [];
+      }
+      throw new Error(`Postgres Error ${response.status}: ${response.statusText}`);
     }
     
-    // Check if response is actually JSON (handles 404 HTML pages)
     const contentType = response.headers.get("content-type");
     if (contentType && contentType.indexOf("application/json") === -1) {
-       throw new Error(`Expected JSON but got ${contentType}`);
+       throw new Error(`Expected JSON from server but got ${contentType}`);
     }
     
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error: any) {
-    throw new Error(error.message || 'Failed to fetch data from server');
+    console.error(`[API Fetch Failed] Could not retrieve data from Postgres: ${error.message}`);
+    throw error; 
   }
 };
 
 export const syncCheques = async (baseUrl: string, data: Cheque[], datasetId: string): Promise<void> => {
   const url = baseUrl ? baseUrl.replace(/\/$/, '') : '';
+  
   try {
     const response = await fetch(`${url}/api/cheques/bulk`, {
       method: 'POST',
@@ -42,14 +47,15 @@ export const syncCheques = async (baseUrl: string, data: Cheque[], datasetId: st
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
-      // Include datasetId in the payload
       body: JSON.stringify({ cheques: data, datasetId }),
     });
 
     if (!response.ok) {
-      throw new Error(`Error ${response.status}: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`Postgres Sync Failed (${response.status}): ${errorText || response.statusText}`);
     }
   } catch (error: any) {
-    throw new Error(error.message || 'Failed to sync data to server');
+    console.error(`[API Sync Failed] Could not save data to Postgres: ${error.message}`);
+    throw error;
   }
 };
