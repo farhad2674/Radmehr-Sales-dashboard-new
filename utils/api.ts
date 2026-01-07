@@ -27,12 +27,16 @@ export const fetchCheques = async (baseUrl: string, datasetId?: string): Promise
   }
 };
 
-export const syncCheques = async (baseUrl: string, data: Cheque[], datasetId: string): Promise<{ success: boolean }> => {
+export const syncCheques = async (baseUrl: string, data: Cheque[], datasetId: string, filename: string): Promise<{ success: boolean }> => {
   try {
     const response = await fetch(`${BASE_API_URL}/api/cheques/bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cheques: data, datasetId }),
+      body: JSON.stringify({ 
+        cheques: data, 
+        datasetId: datasetId,
+        filename: filename 
+      }),
     });
 
     if (!response.ok) {

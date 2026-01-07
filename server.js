@@ -38,48 +38,47 @@ pool.connect()
     console.error(`Error: ${err.message}`);
   });
 
-// 2. Initialize Table Schema
+// 2. Initialize Table Schema (Normalized)
 const initDB = async () => {
   let client;
   try {
     client = await pool.connect();
     
-    // Create Basic Table
+    // 1. Create Uploads Table (Header Info)
     await client.query(`
-      CREATE TABLE IF NOT EXISTS cheques (
-        id TEXT PRIMARY KEY,
-        doc_number TEXT,
-        amount NUMERIC,
-        due_date TEXT,
-        received_from TEXT,
-        status TEXT,
-        bank TEXT,
-        dataset_id TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      CREATE TABLE IF NOT EXISTS uploads (
+        id TEXT PRIMARY KEY,           -- The Unique 9-digit code
+        filename TEXT,
+        upload_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        record_count INTEGER,
+        total_amount NUMERIC
       );
-      CREATE INDEX IF NOT EXISTS idx_dataset_id ON cheques(dataset_id);
     `);
 
-    // Migrate: Add missing columns if they don't exist (Safe migration)
-    const columnsToAdd = [
-        { name: 'series', type: 'TEXT' },
-        { name: 'operation_date', type: 'TEXT' },
-        { name: 'paid_to', type: 'TEXT' },
-        { name: 'description', type: 'TEXT' }
-    ];
+    // 2. Create Cheques Table (Detail Info)
+    // Note: We use upload_id as a Foreign Key linking to uploads.id
+    // ON DELETE CASCADE means if we delete the upload record, all its cheques are auto-deleted.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS cheques (
+        id SERIAL PRIMARY KEY,         -- Auto-incrementing internal ID
+        upload_id TEXT REFERENCES uploads(id) ON DELETE CASCADE, 
+        doc_number TEXT,
+        series TEXT,
+        amount NUMERIC,
+        due_date TEXT,
+        operation_date TEXT,
+        received_from TEXT,
+        paid_to TEXT,
+        status TEXT,
+        bank TEXT,
+        description TEXT
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_cheques_upload_id ON cheques(upload_id);
+      CREATE INDEX IF NOT EXISTS idx_cheques_due_date ON cheques(due_date);
+    `);
 
-    for (const col of columnsToAdd) {
-        await client.query(`
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='cheques' AND column_name='${col.name}') THEN 
-                    ALTER TABLE cheques ADD COLUMN ${col.name} ${col.type}; 
-                END IF; 
-            END $$;
-        `);
-    }
-
-    console.log("Database schema verified and updated with full Excel columns.");
+    console.log("Database schema verified: 'uploads' and 'cheques' tables ready.");
   } catch (err) {
     console.error("Failed to initialize database schema:", err);
   } finally {
@@ -95,25 +94,34 @@ app.get('/api/cheques', async (req, res) => {
   if (!datasetId) return res.json([]);
   
   try {
-    // Select all columns
+    // We join with uploads table just to ensure the upload exists, 
+    // effectively fetching the lines for this header.
     const result = await pool.query(
       `SELECT 
-        id, 
-        doc_number as "docNumber", 
-        series,
-        amount, 
-        due_date as "dueDate", 
-        operation_date as "operationDate",
-        received_from as "receivedFrom", 
-        paid_to as "paidTo",
-        status, 
-        bank, 
-        description 
-       FROM cheques WHERE dataset_id = $1 ORDER BY due_date ASC`,
+        c.doc_number as "docNumber", 
+        c.series,
+        c.amount, 
+        c.due_date as "dueDate", 
+        c.operation_date as "operationDate",
+        c.received_from as "receivedFrom", 
+        c.paid_to as "paidTo",
+        c.status, 
+        c.bank, 
+        c.description 
+       FROM cheques c
+       WHERE c.upload_id = $1 
+       ORDER BY c.due_date ASC`,
       [datasetId]
     );
-    // Convert numeric strings back to numbers
-    const rows = result.rows.map(r => ({...r, amount: Number(r.amount)}));
+
+    // Convert numeric strings back to numbers for the frontend
+    // Generate a temporary ID for React keys since we don't send the DB ID to frontend
+    const rows = result.rows.map((r, index) => ({
+        ...r, 
+        id: `${datasetId}-${index}`,
+        amount: Number(r.amount)
+    }));
+    
     res.json(rows);
   } catch (e) {
     console.error("Fetch Error:", e.message);
@@ -121,33 +129,48 @@ app.get('/api/cheques', async (req, res) => {
   }
 });
 
-// POST: Bulk upload cheques
+// POST: Bulk upload cheques (Transactional)
 app.post('/api/cheques/bulk', async (req, res) => {
-  const { cheques, datasetId } = req.body;
-  if (!datasetId || !Array.isArray(cheques)) return res.status(400).json({ error: "Invalid Data received" });
+  const { cheques, datasetId, filename } = req.body;
+  
+  if (!datasetId || !Array.isArray(cheques)) {
+    return res.status(400).json({ error: "Invalid Data received" });
+  }
 
   let client;
   try {
-    // Attempt connection
     client = await pool.connect();
     
+    // Start Transaction
     await client.query('BEGIN');
     
-    // Clean up old data for this datasetId
-    await client.query('DELETE FROM cheques WHERE dataset_id = $1', [datasetId]);
+    // 1. Remove existing data if this ID is being re-uploaded (Idempotency)
+    // Because of ON DELETE CASCADE, deleting from 'uploads' also deletes from 'cheques'
+    await client.query('DELETE FROM uploads WHERE id = $1', [datasetId]);
+
+    // 2. Calculate Aggregates
+    const recordCount = cheques.length;
+    const totalAmount = cheques.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+
+    // 3. Insert into Uploads (Header)
+    await client.query(
+      `INSERT INTO uploads (id, filename, record_count, total_amount) 
+       VALUES ($1, $2, $3, $4)`,
+      [datasetId, filename || 'Unknown.xlsx', recordCount, totalAmount]
+    );
     
+    // 4. Insert into Cheques (Details)
     const queryText = `
       INSERT INTO cheques (
-        id, doc_number, series, amount, due_date, operation_date, 
-        received_from, paid_to, status, bank, description, dataset_id
+        upload_id, doc_number, series, amount, due_date, operation_date, 
+        received_from, paid_to, status, bank, description
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `;
     
-    // Insert new records
     for (const c of cheques) {
       await client.query(queryText, [
-        c.id, 
+        datasetId, // Links to uploads.id
         c.docNumber, 
         c.series,
         c.amount, 
@@ -157,14 +180,16 @@ app.post('/api/cheques/bulk', async (req, res) => {
         c.paidTo,
         c.status, 
         c.bank, 
-        c.description,
-        datasetId
+        c.description
       ]);
     }
 
+    // Commit Transaction
     await client.query('COMMIT');
-    console.log(`Saved ${cheques.length} records for dataset ${datasetId} (Full Schema)`);
-    res.json({ success: true, count: cheques.length });
+    
+    console.log(`Successfully imported Dataset ${datasetId}: ${recordCount} records.`);
+    res.json({ success: true, count: recordCount });
+
   } catch (e) {
     if (client) {
         try { await client.query('ROLLBACK'); } catch(err) { console.error("Rollback error", err); }

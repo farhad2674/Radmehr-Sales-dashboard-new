@@ -167,7 +167,8 @@ function App() {
           }
 
           // Upload to Server (No Local Fallback)
-          await syncCheques('', normalized, newId);
+          // Pass filename as well
+          await syncCheques('', normalized, newId, file.name);
           
           // Update State
           setDatasetId(newId);
