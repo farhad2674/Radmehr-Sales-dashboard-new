@@ -27,7 +27,9 @@ import {
   Brain,
   Settings,
   Server,
-  ServerCrash
+  ServerCrash,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { Cheque, MonthlyStats, RawChequeData, AnomalyReport } from './types';
 import { normalizeChequeData, getCurrentJalaliDate, formatCurrency, toPersianDigits } from './utils/helpers';
@@ -64,6 +66,7 @@ function App() {
   const [data, setData] = useState<Cheque[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('در حال پردازش...');
+  const [dataSource, setDataSource] = useState<'server' | 'local'>('local'); // Track source
   const [filterUser, setFilterUser] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [currentDate] = useState(getCurrentJalaliDate()); 
@@ -98,11 +101,12 @@ function App() {
     if (!targetId) return;
 
     setLoading(true);
-    setLoadingText('در حال دریافت اطلاعات از سرور...');
+    setLoadingText('در حال دریافت اطلاعات...');
 
     try {
-      const serverData = await fetchCheques('', targetId);
-      setData(serverData);
+      const response = await fetchCheques('', targetId);
+      setData(response.data);
+      setDataSource(response.source);
     } catch (err: any) {
       console.error("Failed to fetch data:", err);
       // Don't clear data immediately on error to avoid flashing, but maybe show alert
@@ -134,7 +138,7 @@ function App() {
 
     const newId = generateDatasetId();
     setLoading(true);
-    setLoadingText('در حال آنالیز و ذخیره در دیتابیس...');
+    setLoadingText('در حال آنالیز و ذخیره...');
 
     setTimeout(() => {
       const reader = new FileReader();
@@ -156,21 +160,27 @@ function App() {
             }));
 
           // Upload to Server with Unique ID
-          await syncCheques('', normalized, newId);
+          const syncResult = await syncCheques('', normalized, newId);
           
           // Update State
           setDatasetId(newId);
+          setDataSource(syncResult.source);
           localStorage.setItem('cheque_dataset_id', newId);
           
           // Refresh Data from DB using new ID
           await refreshData(newId);
           
           if (fileInputRef.current) fileInputRef.current.value = '';
-          alert(`فایل با موفقیت آپلود و ذخیره شد.\nشناسه اختصاصی شما: ${newId}`);
+          
+          const sourceMsg = syncResult.source === 'server' 
+            ? 'با موفقیت در سرور ذخیره شد.' 
+            : 'ارتباط با سرور برقرار نشد، داده‌ها به صورت محلی ذخیره شدند.';
+            
+          alert(`عملیات موفقیت‌آمیز بود.\n${sourceMsg}\nشناسه اختصاصی شما: ${newId}`);
 
         } catch (error: any) {
           console.error("Error processing file:", error);
-          alert(`خطا در آپلود: ${error.message}`);
+          alert(`خطا در پردازش فایل: ${error.message}`);
         } finally {
           setLoading(false);
         }
@@ -352,7 +362,9 @@ function App() {
             </div>
           </div>
           <h2 className="text-xl sm:text-2xl font-bold text-white tracking-wide mb-2 animate-pulse leading-snug">{loadingText}</h2>
-          <p className="text-cyan-500/80 font-mono text-sm tracking-wider animate-pulse">CONNECTING TO POSTGRES...</p>
+          <p className="text-cyan-500/80 font-mono text-sm tracking-wider animate-pulse">
+            {dataSource === 'server' ? 'CONNECTING TO POSTGRES...' : 'PROCESSING LOCAL DATA...'}
+          </p>
         </div>
       )}
 
@@ -387,9 +399,23 @@ function App() {
                 </div>
              )}
 
-             <div className="flex items-center gap-2 px-3 py-1 bg-violet-900/30 border border-violet-500/30 rounded-full">
-                <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse"></div>
-                <span className="text-xs text-violet-300">Cloud DB</span>
+             {/* Connection Status Badge */}
+             <div className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all duration-300 ${
+               dataSource === 'server' 
+                 ? 'bg-violet-900/30 border-violet-500/30 text-violet-300' 
+                 : 'bg-amber-900/30 border-amber-500/30 text-amber-300'
+             }`}>
+                {dataSource === 'server' ? (
+                  <>
+                    <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse shadow-[0_0_8px_rgba(167,139,250,0.6)]"></div>
+                    <span className="text-xs font-medium">Online DB</span>
+                  </>
+                ) : (
+                  <>
+                     <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.6)]"></div>
+                     <span className="text-xs font-medium">Local Mode</span>
+                  </>
+                )}
              </div>
 
              <button 
