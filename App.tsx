@@ -11,24 +11,24 @@ import {
   User,
   Filter,
   BrainCircuit,
-  Sparkles,
   Loader2,
   ChevronDown,
   X,
   BarChart3,
-  Share2,
-  Lock,
-  Copy,
-  DownloadCloud,
-  KeyRound,
-  ShieldCheck,
+  Database,
   ArrowUpDown,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  RefreshCw,
+  Hash,
+  Copy,
+  DownloadCloud,
+  Zap,
+  Brain
 } from 'lucide-react';
 import { Cheque, MonthlyStats, RawChequeData, AnomalyReport } from './types';
 import { normalizeChequeData, getCurrentJalaliDate, formatCurrency, toPersianDigits } from './utils/helpers';
-import { saveSharedDashboard, loadSharedDashboard } from './utils/storage';
+import { fetchCheques, syncCheques } from './utils/api';
 import StatsWidget from './components/StatsWidget';
 import { LiquidityChart, CountChart } from './components/Charts';
 
@@ -47,13 +47,34 @@ const PERSIAN_MONTHS = [
   { value: '12', label: 'اسفند' },
 ];
 
+// Use environment variable if available, otherwise default to relative path
+// Safely check for import.meta.env to avoid "Cannot read properties of undefined"
+const API_BASE_URL = (() => {
+  try {
+    const meta = import.meta as any;
+    return (meta && meta.env && meta.env.VITE_API_URL) || '';
+  } catch (e) {
+    return '';
+  }
+})();
+
 function App() {
+  // Dataset ID Management
+  const [datasetId, setDatasetId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('cheque_dataset_id') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [inputId, setInputId] = useState(datasetId);
+
   const [data, setData] = useState<Cheque[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingText, setLoadingText] = useState('هوش مصنوعی در حال تحلیل داده‌ها...');
+  const [loadingText, setLoadingText] = useState('در حال پردازش...');
   const [filterUser, setFilterUser] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [currentDate] = useState(getCurrentJalaliDate()); // Default "Now"
+  const [currentDate] = useState(getCurrentJalaliDate()); 
   
   // Table Specific Filters
   const [tableYear, setTableYear] = useState<string>('all');
@@ -61,30 +82,46 @@ function App() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterRef = useRef<HTMLDivElement>(null);
 
-  // Sorting State
+  // Sorting
   const [sortConfig, setSortConfig] = useState<{ key: keyof Cheque; direction: 'asc' | 'desc' } | null>({ key: 'dueDate', direction: 'asc' });
 
-  // Chart Range Filter
+  // Chart Range
   const [chartRange, setChartRange] = useState<number>(9);
-
-  // Sharing State
-  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
-  const [isLoadModalOpen, setIsLoadModalOpen] = useState(false);
-  const [sharePasscode, setSharePasscode] = useState('');
-  const [shareId, setShareId] = useState('');
-  const [isSharing, setIsSharing] = useState(false);
-  const [shareError, setShareError] = useState('');
-  const [copySuccess, setCopySuccess] = useState(false);
-
-  // Loading Shared State
-  const [loadId, setLoadId] = useState('');
-  const [loadPasscode, setLoadPasscode] = useState('');
-  const [isLoadingShared, setIsLoadingShared] = useState(false);
-  const [loadError, setLoadError] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Close filter popup when clicking outside
+  // Initial Fetch
+  useEffect(() => {
+    if (datasetId) {
+      refreshData(datasetId);
+    }
+  }, []);
+
+  // Update input when datasetId changes (e.g. after upload)
+  useEffect(() => {
+    setInputId(datasetId);
+  }, [datasetId]);
+
+  const refreshData = async (targetId: string = datasetId) => {
+    if (!targetId) return;
+
+    setLoading(true);
+    setLoadingText('در حال دریافت اطلاعات از سرور...');
+    try {
+      const serverData = await fetchCheques(API_BASE_URL, targetId);
+      setData(serverData);
+    } catch (err: any) {
+      if (err.message && err.message.includes('404')) {
+        console.warn("Backend endpoint not found (404). Assuming empty database.");
+      } else {
+        console.error("Failed to fetch data:", err);
+      }
+      setData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
@@ -97,18 +134,22 @@ function App() {
     };
   }, []);
 
-  // --- Excel Import Logic ---
+  const generateDatasetId = () => {
+    return Math.floor(100000000 + Math.random() * 900000000).toString();
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const newId = generateDatasetId();
     setLoading(true);
-    setLoadingText('هوش مصنوعی در حال تحلیل داده‌ها...');
-    const startTime = Date.now();
+    // Updated text for AI analysis
+    setLoadingText('هوش مصنوعی در حال آنالیز داده‌ها...');
 
     setTimeout(() => {
       const reader = new FileReader();
-      reader.onload = (evt) => {
+      reader.onload = async (evt) => {
         try {
           const bstr = evt.target?.result;
           const wb = XLSX.read(bstr, { type: 'binary' });
@@ -120,20 +161,23 @@ function App() {
             .map((row, index) => normalizeChequeData(row, index))
             .filter((item): item is Cheque => item !== null);
 
-          const elapsed = Date.now() - startTime;
-          const MIN_LOADING_TIME = 3000; 
-          const remainingTime = Math.max(0, MIN_LOADING_TIME - elapsed);
+          // Upload to Server with Unique ID
+          await syncCheques(API_BASE_URL, normalized, newId);
+          
+          // Update State
+          setDatasetId(newId);
+          localStorage.setItem('cheque_dataset_id', newId);
+          
+          // Refresh Data from DB using new ID
+          await refreshData(newId);
+          
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          alert(`فایل با موفقیت آنالیز و آپلود شد.\nشناسه اختصاصی شما: ${newId}`);
 
-          setTimeout(() => {
-            setData(normalized);
-            setLoading(false);
-            if (fileInputRef.current) {
-              fileInputRef.current.value = '';
-            }
-          }, remainingTime);
-
-        } catch (error) {
+        } catch (error: any) {
           console.error("Error processing file:", error);
+          alert(`خطا در آپلود: ${error.message}`);
+        } finally {
           setLoading(false);
         }
       };
@@ -141,60 +185,24 @@ function App() {
     }, 100);
   };
 
-  // --- Sharing Logic ---
-  const handleShare = async () => {
-    if (!sharePasscode || sharePasscode.length < 4) {
-      setShareError('رمز عبور باید حداقل ۴ کاراکتر باشد');
+  const handleLoadDataset = () => {
+    if (!inputId || inputId.length < 5) {
+      alert("لطفا یک شناسه معتبر وارد کنید");
       return;
     }
-    setIsSharing(true);
-    setShareError('');
-    try {
-      const id = await saveSharedDashboard(data, sharePasscode);
-      setShareId(id);
-    } catch (err: any) {
-      setShareError(err.message || 'خطا در اشتراک‌گذاری');
-    } finally {
-      setIsSharing(false);
-    }
+    setDatasetId(inputId);
+    localStorage.setItem('cheque_dataset_id', inputId);
+    refreshData(inputId);
   };
 
   const copyToClipboard = () => {
-    navigator.clipboard.writeText(shareId);
-    setCopySuccess(true);
-    setTimeout(() => setCopySuccess(false), 2000);
-  };
-
-  const resetShareModal = () => {
-    setIsShareModalOpen(false);
-    setShareId('');
-    setSharePasscode('');
-    setShareError('');
-  };
-
-  // --- Load Shared Logic ---
-  const handleLoadShared = async () => {
-    if (!loadId || !loadPasscode) {
-      setLoadError('لطفا شناسه و رمز عبور را وارد کنید');
-      return;
-    }
-    setIsLoadingShared(true);
-    setLoadError('');
-    try {
-      const sharedData = await loadSharedDashboard(loadId, loadPasscode);
-      setData(sharedData);
-      setIsLoadModalOpen(false);
-      // Reset load form
-      setLoadId('');
-      setLoadPasscode('');
-    } catch (err: any) {
-      setLoadError(err.message || 'خطا در دریافت اطلاعات');
-    } finally {
-      setIsLoadingShared(false);
+    if (datasetId) {
+        navigator.clipboard.writeText(datasetId);
+        // Optional: Show toast
     }
   };
 
-  // --- Sorting Logic ---
+  // --- Calculations & Filtering ---
   const handleSort = (key: keyof Cheque) => {
     let direction: 'asc' | 'desc' = 'asc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
@@ -203,8 +211,6 @@ function App() {
     setSortConfig({ key, direction });
   };
 
-
-  // --- Autocomplete Logic ---
   const uniqueNames = useMemo(() => {
     const names = new Set(data.map(item => item.receivedFrom));
     return Array.from(names).filter(Boolean).sort();
@@ -223,7 +229,6 @@ function App() {
     setShowSuggestions(false);
   };
 
-  // --- Filtering Logic (Global) ---
   const filteredData = useMemo(() => {
     return data.filter(item => {
       const isFuture = item.dueDate >= currentDate;
@@ -238,14 +243,12 @@ function App() {
       return data.filter(item => item.dueDate < currentDate);
   }, [data, currentDate]);
 
-  // --- Table Specific Filtering & Sorting Logic ---
   const availableYears = useMemo(() => {
     const years = new Set(filteredData.map(d => d.dueDate.substring(0, 4)));
     return Array.from(years).sort();
   }, [filteredData]);
 
   const tableData = useMemo(() => {
-    // 1. Filter
     let result = filteredData.filter(item => {
         const y = item.dueDate.substring(0, 4);
         const m = item.dueDate.substring(5, 7);
@@ -254,7 +257,6 @@ function App() {
         return matchYear && matchMonth;
     });
 
-    // 2. Sort
     if (sortConfig) {
       result = [...result].sort((a, b) => {
         if (a[sortConfig.key] < b[sortConfig.key]) {
@@ -266,7 +268,6 @@ function App() {
         return 0;
       });
     }
-
     return result;
   }, [filteredData, tableYear, tableMonth, sortConfig]);
 
@@ -277,7 +278,6 @@ function App() {
     return !filteredData.some(d => d.dueDate.substring(0, 4) === tableYear && d.dueDate.substring(5, 7) === mVal);
   };
 
-  // --- Analytics & Aggregation ---
   const analytics = useMemo(() => {
     const monthlyStatsMap = new Map<string, { amount: number; count: number }>();
     let totalFutureAmount = 0;
@@ -326,13 +326,10 @@ function App() {
     if (pastData.length === 0 || filteredData.length === 0) {
       return { isNormal: true, averageMonthlyCount: 0, futureAvgCount: 0, details: "دیتای کافی نیست" };
     }
-
     const pastMonths = new Set(pastData.map(d => d.dueDate.substring(0, 7))).size;
     const avgPast = pastData.length / (pastMonths || 1);
-
     const futureMonths = analytics.monthlyStats.length;
     const avgFuture = filteredData.length / (futureMonths || 1);
-
     const isHighVolume = avgFuture > (avgPast * 1.5);
     
     return {
@@ -350,213 +347,55 @@ function App() {
     <div className="min-h-screen pb-10">
       
       {/* Loading Screen */}
-      {(loading || isLoadingShared) && (
-        <div className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-xl flex flex-col items-center justify-center transition-all duration-500">
-          <div className="relative mb-8">
-            <div className="absolute inset-0 bg-emerald-500/30 blur-3xl rounded-full animate-pulse"></div>
-            <div className="relative z-10 bg-slate-800 p-8 rounded-full border border-slate-700 shadow-2xl">
-               <BrainCircuit size={80} className="text-emerald-400 animate-pulse" />
+      {loading && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-xl flex flex-col items-center justify-center transition-all duration-500 px-4 text-center">
+          <div className="relative mb-8 scale-75 sm:scale-100">
+            {/* Ambient Background Glow */}
+            <div className="absolute inset-0 bg-cyan-500/20 blur-3xl rounded-full animate-pulse"></div>
+            
+            {/* Spinning Rings (Electric Effect) */}
+            <div className="absolute -inset-4 border-t-2 border-r-2 border-cyan-400/60 rounded-full animate-spin duration-[1.5s]"></div>
+            <div className="absolute -inset-8 border-b-2 border-l-2 border-blue-500/40 rounded-full animate-spin direction-reverse duration-[2s]"></div>
+            <div className="absolute -inset-2 border-2 border-dashed border-emerald-400/30 rounded-full animate-spin-slow"></div>
+
+            {/* Inner Container */}
+            <div className="relative z-10 bg-slate-900 p-8 rounded-full border border-slate-700 shadow-[0_0_50px_rgba(6,182,212,0.15)]">
+               <Brain size={80} className="text-cyan-400 animate-pulse drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]" />
+               {/* Spark */}
+               <Zap size={24} className="absolute -top-1 -right-1 text-yellow-400 animate-bounce fill-yellow-400" />
             </div>
-            <div className="absolute -inset-4 border-2 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
           </div>
           
-          <h2 className="text-3xl font-bold text-white tracking-wide mb-3 animate-pulse">
-            {isLoadingShared ? 'در حال دریافت و رمزگشایی اطلاعات...' : loadingText}
+          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-wide mb-2 animate-pulse leading-snug">
+            {loadingText}
           </h2>
-          <div className="flex items-center gap-2 text-emerald-400/80 font-mono text-sm">
-            <Loader2 size={16} className="animate-spin" />
-            <span>Processing Engine Active</span>
-          </div>
+          <p className="text-cyan-500/80 font-mono text-sm tracking-wider animate-pulse">
+            AI PROCESSING ENGINE ACTIVE
+          </p>
         </div>
       )}
-
-      {/* Share Modal */}
-      {isShareModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={resetShareModal}></div>
-          <div className="relative bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
-            <button onClick={resetShareModal} className="absolute top-4 left-4 text-slate-500 hover:text-white">
-              <X size={20} />
-            </button>
-            
-            <div className="flex items-center gap-3 mb-6">
-              <div className="bg-emerald-500/20 p-3 rounded-full">
-                <Share2 className="text-emerald-400" size={24} />
-              </div>
-              <h3 className="text-xl font-bold text-white">اشتراک‌گذاری امن داشبورد</h3>
-            </div>
-
-            {!shareId ? (
-              <div className="space-y-4">
-                <p className="text-slate-400 text-sm leading-relaxed">
-                  اطلاعات شما قبل از ارسال رمزنگاری می‌شود. برای اشتراک‌گذاری، یک <span className="text-emerald-400 font-bold">رمز عبور (Pass Code)</span> تعیین کنید. گیرنده تنها با داشتن شناسه و این رمز عبور می‌تواند اطلاعات را مشاهده کند.
-                </p>
-                
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-slate-300">تعیین رمز عبور (حداقل ۴ کاراکتر)</label>
-                  <div className="relative">
-                    <Lock className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                    <input 
-                      type="text" 
-                      value={sharePasscode}
-                      onChange={(e) => setSharePasscode(e.target.value)}
-                      placeholder="مثلا: 1234"
-                      className="w-full bg-slate-900 border border-slate-600 rounded-xl py-3 pr-10 pl-4 text-white focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                    />
-                  </div>
-                </div>
-
-                {shareError && (
-                  <div className="text-rose-400 text-sm bg-rose-500/10 p-2 rounded-lg flex items-center gap-2">
-                    <AlertTriangle size={16} />
-                    {shareError}
-                  </div>
-                )}
-
-                <button 
-                  onClick={handleShare}
-                  disabled={isSharing}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSharing ? <Loader2 className="animate-spin" /> : <ShieldCheck size={20} />}
-                  <span>تولید لینک امن</span>
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-6 text-center">
-                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4">
-                  <p className="text-emerald-400 font-bold mb-1">داشبورد با موفقیت ذخیره شد!</p>
-                  <p className="text-slate-400 text-xs">شناسه ۵ رقمی زیر را برای همکار خود ارسال کنید.</p>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs text-slate-500 uppercase tracking-wider font-bold">شناسه داشبورد (ID)</label>
-                  <div className="flex gap-2">
-                    <div className="flex-1 bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 font-mono text-center text-lg text-white select-all">
-                      {shareId}
-                    </div>
-                    <button 
-                      onClick={copyToClipboard}
-                      className="bg-slate-700 hover:bg-slate-600 text-white p-3 rounded-xl transition-colors border border-slate-600"
-                      title="کپی شناسه"
-                    >
-                      {copySuccess ? <CheckCircle className="text-emerald-400" /> : <Copy />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50 text-right">
-                  <p className="text-slate-300 text-sm flex items-center gap-2 mb-2">
-                    <KeyRound size={16} className="text-amber-400" />
-                    <span className="font-bold">فراموش نکنید:</span>
-                  </p>
-                  <p className="text-slate-400 text-sm">
-                    شما باید <span className="text-white font-bold">رمز عبور ({sharePasscode})</span> را جداگانه به گیرنده اطلاع دهید. بدون آن، این شناسه فاقد اعتبار است.
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Load Modal */}
-      {isLoadModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsLoadModalOpen(false)}></div>
-          <div className="relative bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
-            <button onClick={() => setIsLoadModalOpen(false)} className="absolute top-4 left-4 text-slate-500 hover:text-white">
-              <X size={20} />
-            </button>
-            
-            <div className="flex items-center gap-3 mb-6">
-              <div className="bg-blue-500/20 p-3 rounded-full">
-                <DownloadCloud className="text-blue-400" size={24} />
-              </div>
-              <h3 className="text-xl font-bold text-white">دریافت داشبورد اشتراکی</h3>
-            </div>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-300">شناسه داشبورد (ID)</label>
-                <input 
-                  type="text" 
-                  value={loadId}
-                  onChange={(e) => setLoadId(e.target.value)}
-                  placeholder="شناسه ۵ رقمی دریافتی (مثلا: 12345)"
-                  className="w-full bg-slate-900 border border-slate-600 rounded-xl py-3 px-4 text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-left dir-ltr"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-300">رمز عبور (Pass Code)</label>
-                <div className="relative">
-                  <KeyRound className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input 
-                    type="text" 
-                    value={loadPasscode}
-                    onChange={(e) => setLoadPasscode(e.target.value)}
-                    placeholder="رمز عبور فایل"
-                    className="w-full bg-slate-900 border border-slate-600 rounded-xl py-3 pr-10 pl-4 text-white focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-
-              {loadError && (
-                <div className="text-rose-400 text-sm bg-rose-500/10 p-2 rounded-lg flex items-center gap-2">
-                  <AlertTriangle size={16} />
-                  {loadError}
-                </div>
-              )}
-
-              <button 
-                onClick={handleLoadShared}
-                disabled={isLoadingShared}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoadingShared ? <Loader2 className="animate-spin" /> : <CheckCircle size={20} />}
-                <span>دریافت و رمزگشایی</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
 
       {/* Header */}
       <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-emerald-500 p-2 rounded-lg">
+            <div className="bg-emerald-500 p-2 rounded-lg shadow-lg shadow-emerald-500/20">
               <TrendingUp className="text-white h-6 w-6" />
             </div>
-            <h1 className="text-2xl font-bold text-white tracking-wide hidden sm:block">
-              داشبورد مدیریت <span className="text-emerald-400">چک و نقدینگی</span>
-            </h1>
-            <h1 className="text-lg font-bold text-white sm:hidden">
-              مدیریت <span className="text-emerald-400">چک</span>
+            <h1 className="text-xl sm:text-2xl font-bold text-white tracking-wide hidden sm:block">
+              داشبورد <span className="text-emerald-400">چک و نقدینگی</span>
             </h1>
           </div>
           
           <div className="flex items-center gap-3">
-             {data.length > 0 && (
-               <button 
-                 onClick={() => setIsShareModalOpen(true)}
-                 className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2.5 rounded-xl transition-all border border-slate-600 font-medium"
-               >
-                 <Share2 size={18} />
-                 <span className="hidden sm:inline">اشتراک‌گذاری</span>
-               </button>
-             )}
-             
+            {/* Minimal actions for header */}
              <button 
               onClick={() => fileInputRef.current?.click()}
               disabled={loading}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-blue-500/20 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl transition-all shadow-lg shadow-blue-500/20 text-sm font-medium disabled:opacity-50"
             >
-              <UploadCloud size={20} />
-              <span className="hidden sm:inline">بارگذاری اکسل</span>
-              <span className="sm:hidden">اکسل</span>
+              <UploadCloud size={18} />
+              <span>آپلود جدید</span>
             </button>
             <input 
               type="file" 
@@ -569,38 +408,79 @@ function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10">
         
-        {/* Empty State */}
-        {data.length === 0 && !loading && (
-           <div className="flex flex-col items-center justify-center h-[60vh] text-center border-2 border-dashed border-slate-700 rounded-3xl bg-slate-800/20 animate-fade-in">
-             <div className="bg-slate-800 p-6 rounded-full mb-4 relative">
-               <UploadCloud size={64} className="text-slate-500" />
-               <div className="absolute -bottom-2 -right-2 bg-emerald-500 text-white p-2 rounded-full shadow-lg">
-                 <Sparkles size={20} className="animate-pulse" />
-               </div>
-             </div>
-             <h2 className="text-2xl font-bold text-slate-300 mb-2">فایل اکسل خود را وارد کنید</h2>
-             <p className="text-slate-400 max-w-md mb-8">
-               برای مشاهده تحلیل‌ها، لیست چک‌ها و نمودارهای هوشمند، فایل داده‌های خود را بارگذاری کنید.
-             </p>
+        {/* Central Electric ID Switcher */}
+        <div className="relative group w-full max-w-lg mx-auto mb-12 z-20">
+          {/* Electric Glow Effect */}
+          <div className="absolute -inset-1 bg-gradient-to-r from-cyan-400 via-emerald-500 to-cyan-400 rounded-2xl blur-lg opacity-40 group-hover:opacity-100 transition duration-1000 group-hover:duration-200 animate-pulse"></div>
+          
+          <div className="relative flex items-center bg-slate-900 rounded-2xl border border-slate-700/50 p-2 shadow-2xl ring-1 ring-white/10">
+            <div className="pl-4 pr-3 text-emerald-400">
+               <Hash size={24} />
+            </div>
+            
+            <div className="flex-1 flex flex-col justify-center border-l border-r border-slate-700/50 px-4">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">شناسه دیتاست</span>
+              <input 
+                  type="text" 
+                  value={inputId}
+                  onChange={(e) => setInputId(e.target.value.replace(/[^0-9]/g, '').slice(0,9))}
+                  placeholder="--- --- ---"
+                  className="bg-transparent border-none focus:outline-none text-white text-xl font-mono font-bold tracking-[0.3em] placeholder:text-slate-700 w-full text-center h-7"
+                  maxLength={9}
+               />
+            </div>
+
+             <button 
+                onClick={handleLoadDataset}
+                disabled={!inputId || inputId.length < 5}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-white p-3 rounded-xl transition-all shadow-lg shadow-emerald-500/20 disabled:shadow-none mx-1"
+                title="بارگذاری"
+             >
+                <Zap size={24} className={inputId && inputId.length > 5 ? "fill-white" : ""} />
+             </button>
+          </div>
+          
+          <div className="absolute top-full left-0 right-0 flex justify-center mt-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            <span className="text-xs text-emerald-400 font-medium bg-slate-900/80 px-3 py-1 rounded-full backdrop-blur-sm border border-emerald-500/20">
+              شناسه ۹ رقمی فایل خود را وارد کنید
+            </span>
+          </div>
+        </div>
+
+        {/* Empty State / No ID */}
+        {(!datasetId || (data.length === 0 && !loading)) && (
+           <div className="flex flex-col items-center justify-center h-[50vh] text-center border-2 border-dashed border-slate-700 rounded-3xl bg-slate-800/20 animate-fade-in relative overflow-hidden">
              
-             <div className="flex flex-col sm:flex-row gap-4">
-               <button 
-                 onClick={() => fileInputRef.current?.click()}
-                 className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2"
-               >
-                 <UploadCloud size={20} />
-                 انتخاب فایل از سیستم
-               </button>
-               
-               <button 
-                 onClick={() => setIsLoadModalOpen(true)}
-                 className="bg-slate-700 hover:bg-slate-600 text-slate-200 px-6 py-3 rounded-xl font-bold border border-slate-600 transition-all flex items-center justify-center gap-2"
-               >
-                 <DownloadCloud size={20} />
-                 دارای شناسه اشتراک هستم
-               </button>
+             <div className="relative z-10 flex flex-col items-center">
+                <div className="bg-slate-800 p-6 rounded-full mb-4 relative ring-4 ring-slate-800 border border-slate-700">
+                  <Database size={64} className="text-slate-500" />
+                  <div className="absolute -bottom-2 -right-2 bg-blue-500 text-white p-2 rounded-full shadow-lg">
+                    <UploadCloud size={20} className="animate-bounce" />
+                  </div>
+                </div>
+                
+                <h2 className="text-2xl font-bold text-slate-300 mb-2">
+                  {datasetId ? "داده‌ای یافت نشد" : "خوش آمدید"}
+                </h2>
+                <p className="text-slate-400 max-w-md mb-8 px-4">
+                    برای شروع، فایل اکسل خود را آپلود کنید تا یک شناسه اختصاصی دریافت کنید، یا شناسه قبلی خود را در کادر بالا وارد نمایید.
+                </p>
+                
+                <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-10 py-4 rounded-2xl font-bold shadow-xl shadow-blue-500/20 transition-all flex items-center justify-center gap-3 text-lg group"
+                >
+                    <UploadCloud size={24} className="group-hover:scale-110 transition-transform" />
+                    آپلود فایل جدید
+                </button>
+             </div>
+
+             {/* Background Decoration */}
+             <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
+                 <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-blue-500/30 rounded-full blur-3xl"></div>
+                 <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-emerald-500/30 rounded-full blur-3xl"></div>
              </div>
            </div>
         )}
@@ -609,6 +489,27 @@ function App() {
         {data.length > 0 && !loading && (
           <div className="space-y-8 animate-fade-in">
             
+            {/* ID Info Banner */}
+            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3 text-emerald-400">
+                    <div className="bg-emerald-500/20 p-2 rounded-full">
+                       <CheckCircle size={20} />
+                    </div>
+                    <span className="font-medium">اطلاعات با موفقیت بارگذاری شد</span>
+                </div>
+                <div className="flex items-center gap-2 bg-slate-900/50 p-2 pr-4 rounded-xl border border-slate-700/50">
+                    <span className="text-slate-400 text-sm">شناسه فعلی:</span>
+                    <button 
+                        onClick={copyToClipboard}
+                        className="text-white font-mono font-bold tracking-widest text-lg hover:text-emerald-400 transition-colors flex items-center gap-2"
+                        title="کپی در حافظه"
+                    >
+                        {toPersianDigits(datasetId)}
+                        <Copy size={16} className="text-slate-500 hover:text-white" />
+                    </button>
+                </div>
+            </div>
+
             {/* Filter Bar */}
             <div className="bg-slate-800/60 backdrop-blur-sm border border-slate-700 p-4 rounded-2xl flex flex-wrap gap-4 items-center justify-between z-40 relative">
               <div className="flex items-center gap-2 text-slate-400">
@@ -631,7 +532,6 @@ function App() {
                   className="w-full bg-slate-900 border border-slate-700 text-slate-200 pr-10 pl-4 py-3 rounded-xl focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
                 />
                 
-                {/* Suggestions Dropdown */}
                 {showSuggestions && suggestions.length > 0 && (
                   <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5">
                     <ul className="max-h-60 overflow-y-auto py-1">
@@ -715,7 +615,6 @@ function App() {
               </div>
             </div>
 
-            {/* Charts Section */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               <LiquidityChart data={chartData} />
               <CountChart data={chartData} />
@@ -732,7 +631,6 @@ function App() {
                   </h3>
 
                   <div className="flex items-center gap-2 mr-auto sm:mr-0">
-                    {/* Mobile Sort Button */}
                     <button 
                       onClick={() => handleSort('amount')}
                       className={`md:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border whitespace-nowrap ${
@@ -749,7 +647,6 @@ function App() {
                       <span>مبلغ</span>
                     </button>
 
-                    {/* Table Filter Button */}
                     <div className="relative" ref={filterRef}>
                       <button 
                         onClick={() => setIsFilterOpen(!isFilterOpen)}
@@ -764,7 +661,6 @@ function App() {
                         )}
                       </button>
 
-                      {/* Filter Popup */}
                       {isFilterOpen && (
                         <div className="absolute top-full right-0 mt-2 w-64 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 p-4 animate-in fade-in zoom-in-95 duration-200">
                           <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-700">
@@ -781,7 +677,6 @@ function App() {
                           </div>
 
                           <div className="space-y-4">
-                            {/* Year Selector */}
                             <div className="space-y-1">
                               <label className="text-xs text-slate-400">سال:</label>
                               <div className="relative">
@@ -789,7 +684,6 @@ function App() {
                                   value={tableYear}
                                   onChange={(e) => {
                                     setTableYear(e.target.value);
-                                    // Reset month if it doesn't exist in new year? No, keep logic simple, user sees grayed out options.
                                   }}
                                   className="w-full bg-slate-900 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm appearance-none focus:border-emerald-500 focus:outline-none"
                                 >
@@ -802,7 +696,6 @@ function App() {
                               </div>
                             </div>
 
-                            {/* Month Selector */}
                             <div className="space-y-1">
                               <label className="text-xs text-slate-400">ماه:</label>
                               <div className="relative">
@@ -836,7 +729,6 @@ function App() {
                 <span className="text-slate-400 text-xs sm:text-sm self-end sm:self-auto">{toPersianDigits(tableData.length)} رکورد نمایش داده شده</span>
               </div>
               
-              {/* Desktop Table View */}
               <div className="hidden md:block overflow-x-auto max-h-[500px] overflow-y-auto rounded-b-2xl custom-scrollbar">
                 <table className="w-full text-right">
                   <thead className="bg-slate-900/50 text-slate-400 sticky top-0 z-10 backdrop-blur-md">
@@ -844,7 +736,6 @@ function App() {
                       <th className="px-6 py-4 font-medium text-sm">شماره سند</th>
                       <th className="px-6 py-4 font-medium text-sm">دریافت از</th>
                       
-                      {/* Sortable Due Date Header */}
                       <th 
                         className="px-6 py-4 font-medium text-sm cursor-pointer hover:text-emerald-400 transition-colors group select-none"
                         onClick={() => handleSort('dueDate')}
@@ -859,7 +750,6 @@ function App() {
                         </div>
                       </th>
 
-                      {/* Sortable Amount Header */}
                       <th 
                         className="px-6 py-4 font-medium text-sm cursor-pointer hover:text-emerald-400 transition-colors group select-none"
                         onClick={() => handleSort('amount')}
@@ -905,7 +795,6 @@ function App() {
                 </table>
               </div>
 
-              {/* Mobile Card View */}
               <div className="md:hidden max-h-[500px] overflow-y-auto p-4 space-y-4">
                  {tableData.length > 0 ? (
                     tableData.map((cheque) => (
@@ -951,9 +840,7 @@ function App() {
                     </div>
                  )}
               </div>
-
             </div>
-
           </div>
         )}
       </main>
