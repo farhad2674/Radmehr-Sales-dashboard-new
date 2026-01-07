@@ -8,16 +8,41 @@ app.use(cors());
 // Increase payload limit for large Excel files
 app.use(express.json({ limit: '50mb' }));
 
-// 1. Database Connection
-// Check for DATABASE_URL to help debugging
-if (!process.env.DATABASE_URL) {
-  console.error("WARNING: DATABASE_URL environment variable is not set. Database operations will fail.");
+// 1. Database Connection Configuration
+const dbUrl = process.env.DATABASE_URL;
+
+if (!dbUrl) {
+  console.warn("WARNING: DATABASE_URL environment variable is not set. Database features will not work.");
 }
 
+// Detect if we are using an internal Railway URL (postgres.railway.internal)
+// Internal connections inside Railway's private network usually require SSL to be disabled or handled differently than public connections.
+const isRailwayInternal = dbUrl && dbUrl.includes('railway.internal');
+
+console.log(`Database Config: ${dbUrl ? 'URL Set' : 'URL Missing'} | Mode: ${isRailwayInternal ? 'Railway Internal' : 'Public/Standard'}`);
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false } // Required for most cloud Postgres connections
+  connectionString: dbUrl,
+  // If internal, disable SSL to prevent "server does not support SSL" errors.
+  // If public (e.g. connecting from local to cloud), strictly require valid SSL.
+  ssl: dbUrl ? (isRailwayInternal ? false : { rejectUnauthorized: false }) : undefined
 });
+
+// Test Connection on Startup
+pool.connect()
+  .then(client => {
+    console.log("✅ Successfully connected to PostgreSQL database!");
+    client.release();
+    // Initialize Schema only if connected
+    initDB();
+  })
+  .catch(err => {
+    console.error("❌ Failed to connect to database on startup.");
+    console.error(`Error: ${err.message}`);
+    if (isRailwayInternal && err.code === 'ENOTFOUND') {
+      console.error("HINT: You are using a 'railway.internal' URL locally. This URL only works when the app is deployed on Railway. For local development, use the Public Proxy URL provided in Railway dashboard.");
+    }
+  });
 
 // 2. Initialize Table Schema
 const initDB = async () => {
@@ -38,14 +63,13 @@ const initDB = async () => {
       );
       CREATE INDEX IF NOT EXISTS idx_dataset_id ON cheques(dataset_id);
     `);
-    console.log("Database schema initialized successfully.");
+    console.log("Database schema verified.");
   } catch (err) {
-    console.error("Failed to initialize database:", err);
+    console.error("Failed to initialize database schema:", err);
   } finally {
     if (client) client.release();
   }
 };
-initDB();
 
 // 3. API Endpoints
 
@@ -63,8 +87,8 @@ app.get('/api/cheques', async (req, res) => {
     const rows = result.rows.map(r => ({...r, amount: Number(r.amount)}));
     res.json(rows);
   } catch (e) {
-    console.error("Fetch Error:", e);
-    res.status(500).json({ error: e.message });
+    console.error("Fetch Error:", e.message);
+    res.status(500).json({ error: "Database fetch failed" });
   }
 });
 
@@ -75,12 +99,12 @@ app.post('/api/cheques/bulk', async (req, res) => {
 
   let client;
   try {
-    // CRITICAL FIX: Connect inside try/catch so connection errors are caught
+    // Attempt connection
     client = await pool.connect();
     
     await client.query('BEGIN');
     
-    // Clean up old data for this datasetId to prevent duplicates on re-upload
+    // Clean up old data for this datasetId
     await client.query('DELETE FROM cheques WHERE dataset_id = $1', [datasetId]);
     
     const queryText = `
@@ -96,15 +120,13 @@ app.post('/api/cheques/bulk', async (req, res) => {
     }
 
     await client.query('COMMIT');
-    console.log(`Successfully saved dataset ${datasetId} with ${cheques.length} records.`);
+    console.log(`Saved ${cheques.length} records for dataset ${datasetId}`);
     res.json({ success: true, count: cheques.length });
   } catch (e) {
-    // Safely rollback
     if (client) {
-        try { await client.query('ROLLBACK'); } catch(err) { console.error("Rollback failed", err); }
+        try { await client.query('ROLLBACK'); } catch(err) { console.error("Rollback error", err); }
     }
-    console.error("Bulk Upload Error:", e);
-    // Send the actual error message back to frontend
+    console.error("Bulk Upload Error:", e.message);
     res.status(500).json({ error: `Database Error: ${e.message}` });
   } finally {
     if (client) client.release();
@@ -112,10 +134,9 @@ app.post('/api/cheques/bulk', async (req, res) => {
 });
 
 // 4. Serve Frontend
-// Serve static files from the 'dist' directory (Vite build output)
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Handle client-side routing by returning index.html for all other routes
+// Handle client-side routing
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
