@@ -5,9 +5,17 @@ const fs = require('fs');
 const Database = require('better-sqlite3');
 
 const app = express();
+
+// Middleware
 app.use(cors());
-// Increase payload limit for large Excel files
-app.use(express.json({ limit: '50mb' }));
+// Increase payload limit for large Excel files - essential for 40K records
+app.use(express.json({ limit: '100mb' }));
+
+// Request Logger (Helps debug if requests are actually hitting this server)
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
 
 // 1. Database Setup (SQLite)
 // We store the DB in a 'data' folder. On Railway, mount a Volume to /app/data to persist this.
@@ -38,13 +46,11 @@ try {
 } catch (err) {
   console.error("❌ Failed to initialize SQLite database.");
   console.error(`Error: ${err.message}`);
-  console.error("Hint: Make sure you have installed 'better-sqlite3' (npm install better-sqlite3)");
 }
 
 // 2. Initialize Table Schema
 function initDB() {
   try {
-    // 1. Uploads Table (Header Info)
     db.exec(`
       CREATE TABLE IF NOT EXISTS uploads (
         id TEXT PRIMARY KEY,
@@ -55,7 +61,6 @@ function initDB() {
       );
     `);
 
-    // 2. Cheques Table (Detail Info)
     db.exec(`
       CREATE TABLE IF NOT EXISTS cheques (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +79,6 @@ function initDB() {
       );
     `);
     
-    // Indices for speed
     db.exec(`CREATE INDEX IF NOT EXISTS idx_cheques_upload_id ON cheques(upload_id);`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_cheques_due_date ON cheques(due_date);`);
 
@@ -86,7 +90,12 @@ function initDB() {
 
 // 3. API Endpoints
 
-// GET: Fetch cheques for a specific dataset ID
+// Health Check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', database: 'sqlite' });
+});
+
+// GET: Fetch cheques
 app.get('/api/cheques', (req, res) => {
   const { datasetId } = req.query;
   if (!datasetId) return res.json([]);
@@ -111,7 +120,6 @@ app.get('/api/cheques', (req, res) => {
     
     const rows = stmt.all(datasetId);
 
-    // Map to frontend structure (SQLite returns mostly correct types, but ensuring amount is number)
     const formattedRows = rows.map((r, index) => ({
         ...r, 
         id: `${datasetId}-${index}`,
@@ -125,31 +133,28 @@ app.get('/api/cheques', (req, res) => {
   }
 });
 
-// POST: Bulk upload cheques (Transaction Optimized)
+// POST: Bulk upload cheques
 app.post('/api/cheques/bulk', (req, res) => {
   const { cheques, datasetId, filename } = req.body;
   
+  console.log(`📥 Received bulk upload request for ID: ${datasetId}, Count: ${cheques?.length}`);
+
   if (!datasetId || !Array.isArray(cheques)) {
     return res.status(400).json({ error: "Invalid Data received" });
   }
 
   try {
-    // SQLite Transaction: All or Nothing, and VERY Fast.
     const runTransaction = db.transaction((data, id, file) => {
-      // 1. Clean existing (Cascade deletes cheques)
       db.prepare('DELETE FROM uploads WHERE id = ?').run(id);
 
-      // 2. Calculate Aggregates
       const recordCount = data.length;
       const totalAmount = data.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
 
-      // 3. Insert Header
       db.prepare(`
         INSERT INTO uploads (id, filename, record_count, total_amount) 
         VALUES (?, ?, ?, ?)
       `).run(id, file || 'Unknown.xlsx', recordCount, totalAmount);
 
-      // 4. Insert Details (Prepared Statement reused)
       const insertStmt = db.prepare(`
         INSERT INTO cheques (
           upload_id, doc_number, series, amount, due_date, operation_date, 
@@ -161,26 +166,24 @@ app.post('/api/cheques/bulk', (req, res) => {
       for (const c of data) {
         insertStmt.run(
           id,
-          c.docNumber,
-          c.series,
-          c.amount,
-          c.dueDate,
-          c.operationDate,
-          c.receivedFrom,
-          c.paidTo,
-          c.status,
-          c.bank,
-          c.description
+          c.docNumber || '',
+          c.series || '',
+          c.amount || 0,
+          c.dueDate || '',
+          c.operationDate || '',
+          c.receivedFrom || '',
+          c.paidTo || '',
+          c.status || '',
+          c.bank || '',
+          c.description || ''
         );
       }
       
       return recordCount;
     });
 
-    // Execute the transaction
     const count = runTransaction(cheques, datasetId, filename);
-    
-    console.log(`✅ Successfully imported Dataset ${datasetId}: ${count} records.`);
+    console.log(`✅ Successfully imported ${count} records.`);
     res.json({ success: true, count });
 
   } catch (e) {
@@ -189,10 +192,10 @@ app.post('/api/cheques/bulk', (req, res) => {
   }
 });
 
-// 4. Serve Frontend
+// 4. Serve Frontend (Must be AFTER API routes)
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Handle client-side routing
+// Handle client-side routing for SPA
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });

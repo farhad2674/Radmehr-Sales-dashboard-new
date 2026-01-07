@@ -218,8 +218,6 @@ function App() {
         // Refresh Data from DB using new ID
         await refreshData(newId);
         
-        if (fileInputRef.current) fileInputRef.current.value = '';
-        
         setNotification({
           type: 'success',
           message: 'عملیات موفق',
@@ -234,6 +232,7 @@ function App() {
           subMessage: error.message || 'مشکلی در ارتباط با سرور وجود دارد'
         });
       } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
         setLoading(false);
         setProgress(0);
       }
