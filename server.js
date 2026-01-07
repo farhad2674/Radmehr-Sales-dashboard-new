@@ -201,7 +201,9 @@ app.post('/api/cheques/bulk', (req, res) => {
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Handle client-side routing for SPA
-app.get('*', (req, res) => {
+// FIX: Express 5 / path-to-regexp v6+ does not support '*' as a wildcard. 
+// We use a regex /.*/ match all remaining routes.
+app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
