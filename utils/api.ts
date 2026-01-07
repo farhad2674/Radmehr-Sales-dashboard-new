@@ -34,8 +34,14 @@ export const syncCheques = async (baseUrl: string, data: Cheque[], datasetId: st
     });
 
     if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Server Sync Error: ${errText}`);
+      // Improved error parsing
+      const errorText = await response.text();
+      let errorMsg = errorText;
+      try {
+         const json = JSON.parse(errorText);
+         if(json.error) errorMsg = json.error;
+      } catch {}
+      throw new Error(errorMsg || response.statusText);
     }
     
     console.log(`Successfully synced ${data.length} records to Railway Postgres.`);

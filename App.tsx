@@ -148,7 +148,12 @@ function App() {
 
           const normalized = jsonData
             .map((row, index) => normalizeChequeData(row, index))
-            .filter((item): item is Cheque => item !== null);
+            .filter((item): item is Cheque => item !== null)
+            // CRITICAL FIX: Ensure globally unique IDs by combining Dataset ID and Index
+            .map((item, idx) => ({
+                ...item,
+                id: `${newId}-${idx}`
+            }));
 
           // Upload to Server with Unique ID
           await syncCheques('', normalized, newId);
