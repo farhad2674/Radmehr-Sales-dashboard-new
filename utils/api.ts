@@ -34,19 +34,27 @@ export const syncCheques = async (baseUrl: string, data: Cheque[], datasetId: st
     });
 
     if (!response.ok) {
-      // Improved error parsing
       const errorText = await response.text();
       let errorMsg = errorText;
+      
       try {
+         // Try to parse JSON error from server
          const json = JSON.parse(errorText);
          if(json.error) errorMsg = json.error;
-      } catch {}
+      } catch {
+         // If parsing fails (e.g. HTML 502 error), check if it looks like HTML
+         if (errorText.trim().startsWith('<')) {
+            errorMsg = `Server Error (${response.status}): The server returned an unexpected response (HTML). Check server logs.`;
+         }
+      }
+      
       throw new Error(errorMsg || response.statusText);
     }
     
     console.log(`Successfully synced ${data.length} records to Railway Postgres.`);
   } catch (error: any) {
     console.error("API Sync Error:", error);
-    throw new Error(`Could not save to database: ${error.message}`);
+    // Don't swallow the message, pass it up
+    throw new Error(error.message);
   }
 };

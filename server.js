@@ -9,7 +9,11 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 // 1. Database Connection
-// Railway automatically provides DATABASE_URL in the environment variables
+// Check for DATABASE_URL to help debugging
+if (!process.env.DATABASE_URL) {
+  console.error("WARNING: DATABASE_URL environment variable is not set. Database operations will fail.");
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false } // Required for most cloud Postgres connections
@@ -17,8 +21,10 @@ const pool = new Pool({
 
 // 2. Initialize Table Schema
 const initDB = async () => {
+  let client;
   try {
-    await pool.query(`
+    client = await pool.connect();
+    await client.query(`
       CREATE TABLE IF NOT EXISTS cheques (
         id TEXT PRIMARY KEY,
         doc_number TEXT,
@@ -32,9 +38,11 @@ const initDB = async () => {
       );
       CREATE INDEX IF NOT EXISTS idx_dataset_id ON cheques(dataset_id);
     `);
-    console.log("Database schema initialized.");
+    console.log("Database schema initialized successfully.");
   } catch (err) {
     console.error("Failed to initialize database:", err);
+  } finally {
+    if (client) client.release();
   }
 };
 initDB();
@@ -55,7 +63,7 @@ app.get('/api/cheques', async (req, res) => {
     const rows = result.rows.map(r => ({...r, amount: Number(r.amount)}));
     res.json(rows);
   } catch (e) {
-    console.error(e);
+    console.error("Fetch Error:", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -63,10 +71,13 @@ app.get('/api/cheques', async (req, res) => {
 // POST: Bulk upload cheques
 app.post('/api/cheques/bulk', async (req, res) => {
   const { cheques, datasetId } = req.body;
-  if (!datasetId || !Array.isArray(cheques)) return res.status(400).send("Invalid Data");
+  if (!datasetId || !Array.isArray(cheques)) return res.status(400).json({ error: "Invalid Data received" });
 
-  const client = await pool.connect();
+  let client;
   try {
+    // CRITICAL FIX: Connect inside try/catch so connection errors are caught
+    client = await pool.connect();
+    
     await client.query('BEGIN');
     
     // Clean up old data for this datasetId to prevent duplicates on re-upload
@@ -85,13 +96,18 @@ app.post('/api/cheques/bulk', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    console.log(`Successfully saved dataset ${datasetId} with ${cheques.length} records.`);
     res.json({ success: true, count: cheques.length });
   } catch (e) {
-    await client.query('ROLLBACK');
-    console.error(e);
-    res.status(500).json({ error: e.message });
+    // Safely rollback
+    if (client) {
+        try { await client.query('ROLLBACK'); } catch(err) { console.error("Rollback failed", err); }
+    }
+    console.error("Bulk Upload Error:", e);
+    // Send the actual error message back to frontend
+    res.status(500).json({ error: `Database Error: ${e.message}` });
   } finally {
-    client.release();
+    if (client) client.release();
   }
 });
 
