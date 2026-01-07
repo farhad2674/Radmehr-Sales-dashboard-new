@@ -29,7 +29,8 @@ import {
   Server,
   ServerCrash,
   Wifi,
-  WifiOff
+  WifiOff,
+  Info
 } from 'lucide-react';
 import { Cheque, MonthlyStats, RawChequeData, AnomalyReport } from './types';
 import { normalizeChequeData, getCurrentJalaliDate, formatCurrency, toPersianDigits } from './utils/helpers';
@@ -71,6 +72,9 @@ function App() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [currentDate] = useState(getCurrentJalaliDate()); 
   
+  // Notification State
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info'; subMessage?: string } | null>(null);
+
   // Table Specific Filters
   const [tableYear, setTableYear] = useState<string>('all');
   const [tableMonth, setTableMonth] = useState<string>('all');
@@ -96,6 +100,14 @@ function App() {
   useEffect(() => {
     setInputId(datasetId);
   }, [datasetId]);
+
+  // Auto-dismiss notification
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
 
   const refreshData = async (targetId: string = datasetId) => {
     if (!targetId) return;
@@ -159,6 +171,10 @@ function App() {
                 id: `${newId}-${idx}`
             }));
 
+          if (normalized.length === 0) {
+            throw new Error("هیچ داده معتبری در فایل یافت نشد.");
+          }
+
           // Upload to Server with Unique ID
           const syncResult = await syncCheques('', normalized, newId);
           
@@ -173,14 +189,22 @@ function App() {
           if (fileInputRef.current) fileInputRef.current.value = '';
           
           const sourceMsg = syncResult.source === 'server' 
-            ? 'با موفقیت در سرور ذخیره شد.' 
-            : 'ارتباط با سرور برقرار نشد، داده‌ها به صورت محلی ذخیره شدند.';
+            ? 'با موفقیت در دیتابیس آنلاین ذخیره شد.' 
+            : 'ذخیره در حالت آفلاین (Local Mode) انجام شد.';
             
-          alert(`عملیات موفقیت‌آمیز بود.\n${sourceMsg}\nشناسه اختصاصی شما: ${newId}`);
+          setNotification({
+            type: 'success',
+            message: 'فایل با موفقیت بارگذاری شد',
+            subMessage: `${sourceMsg} شناسه: ${newId}`
+          });
 
         } catch (error: any) {
           console.error("Error processing file:", error);
-          alert(`خطا در پردازش فایل: ${error.message}`);
+          setNotification({
+            type: 'error',
+            message: 'خطا در پردازش فایل',
+            subMessage: error.message
+          });
         } finally {
           setLoading(false);
         }
@@ -191,7 +215,11 @@ function App() {
 
   const handleLoadDataset = () => {
     if (!inputId || inputId.length < 5) {
-      alert("لطفا یک شناسه معتبر وارد کنید");
+      setNotification({
+        type: 'error',
+        message: 'شناسه نامعتبر',
+        subMessage: 'لطفا یک شناسه صحیح وارد کنید'
+      });
       return;
     }
     setDatasetId(inputId);
@@ -202,6 +230,11 @@ function App() {
   const copyToClipboard = () => {
     if (datasetId) {
         navigator.clipboard.writeText(datasetId);
+        setNotification({
+          type: 'info',
+          message: 'کپی شد',
+          subMessage: 'شناسه در حافظه کپی شد'
+        });
     }
   };
 
@@ -349,6 +382,33 @@ function App() {
   return (
     <div className="min-h-screen pb-10">
       
+      {/* Toast Notification */}
+      {notification && (
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[110] flex items-center gap-3 px-6 py-4 rounded-xl shadow-2xl backdrop-blur-md border animate-in slide-in-from-top-4 fade-in duration-300 min-w-[300px] max-w-md ${
+          notification.type === 'success' ? 'bg-emerald-900/90 border-emerald-500/50 text-emerald-100' : 
+          notification.type === 'error' ? 'bg-rose-900/90 border-rose-500/50 text-rose-100' :
+          'bg-slate-800/90 border-slate-600/50 text-slate-100'
+        }`}>
+          <div className={`p-2 rounded-full ${
+            notification.type === 'success' ? 'bg-emerald-500/20' : 
+            notification.type === 'error' ? 'bg-rose-500/20' :
+            'bg-slate-500/20'
+          }`}>
+            {notification.type === 'success' ? <CheckCircle size={24} className="text-emerald-400" /> : 
+             notification.type === 'error' ? <AlertTriangle size={24} className="text-rose-400" /> :
+             <Info size={24} className="text-blue-400" />
+            }
+          </div>
+          <div className="flex-1">
+            <h4 className="font-bold text-sm">{notification.message}</h4>
+            {notification.subMessage && <p className="text-xs opacity-80 mt-1 leading-relaxed">{notification.subMessage}</p>}
+          </div>
+          <button onClick={() => setNotification(null)} className="text-white/50 hover:text-white transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+      )}
+
       {/* Loading Screen */}
       {loading && (
         <div className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-xl flex flex-col items-center justify-center transition-all duration-500 px-4 text-center">
