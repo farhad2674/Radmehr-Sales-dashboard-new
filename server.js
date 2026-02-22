@@ -53,15 +53,29 @@ const pool = new Pool({
 const hostLog = process.env.DATABASE_URL ? 'DATABASE_URL provided' : dbConfig.host;
 console.log(`🔌 Attempting to connect to PostgreSQL at host: ${hostLog}`);
 
-// Test Connection & Initialize
-pool.connect().then(client => {
-  console.log("✅ Successfully connected to PostgreSQL database!");
-  initDB(client).then(() => client.release());
-}).catch(err => {
-  console.error("❌ Failed to connect to PostgreSQL database.");
-  console.error(`Error Details: ${err.message}`);
-  console.error("Hint: Check your DB_HOST, DB_USER, DB_PASSWORD and ensure the database container is running.");
-});
+// Test Connection & Initialize and Start Server
+const startApp = async () => {
+  try {
+    const client = await pool.connect();
+    console.log("✅ Successfully connected to PostgreSQL database!");
+    
+    await initDB(client);
+    client.release();
+
+    const port = process.env.PORT || 3000;
+    app.listen(port, () => {
+      console.log(`🚀 Server running on port ${port}`);
+      console.log(`💾 Storage Mode: PostgreSQL`);
+    });
+  } catch (err) {
+    console.error("❌ Failed to connect to PostgreSQL database. Server not started.");
+    console.error(`Error Details: ${err.message}`);
+    console.error("Hint: Check your DB_HOST, DB_USER, DB_PASSWORD and ensure the database container is running.");
+    process.exit(1);
+  }
+};
+
+startApp();
 
 // 2. Initialize Table Schema
 async function initDB(client) {
@@ -229,10 +243,4 @@ app.use(express.static(path.join(__dirname, 'dist')));
 // Express 5 / path-to-regexp v6+ regex match for all routes
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
-
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-  console.log(`💾 Storage Mode: PostgreSQL`);
 });
