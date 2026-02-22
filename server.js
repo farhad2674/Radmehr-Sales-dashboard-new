@@ -53,29 +53,37 @@ const pool = new Pool({
 const hostLog = process.env.DATABASE_URL ? 'DATABASE_URL provided' : dbConfig.host;
 console.log(`🔌 Attempting to connect to PostgreSQL at host: ${hostLog}`);
 
-// Test Connection & Initialize and Start Server
-const startApp = async () => {
-  try {
-    const client = await pool.connect();
-    console.log("✅ Successfully connected to PostgreSQL database!");
-    
-    await initDB(client);
-    client.release();
+// Start Server Immediately to satisfy health checks
+const port = process.env.PORT || 3000;
+const server = app.listen(port, () => {
+  console.log(`🚀 Server running on port ${port}`);
+  console.log(`💾 Storage Mode: PostgreSQL`);
+});
 
-    const port = process.env.PORT || 3000;
-    app.listen(port, () => {
-      console.log(`🚀 Server running on port ${port}`);
-      console.log(`💾 Storage Mode: PostgreSQL`);
-    });
-  } catch (err) {
-    console.error("❌ Failed to connect to PostgreSQL database. Server not started.");
-    console.error(`Error Details: ${err.message}`);
-    console.error("Hint: Check your DB_HOST, DB_USER, DB_PASSWORD and ensure the database container is running.");
-    process.exit(1);
+// Database Connection Logic with Retry
+const connectDB = async (retries = 10) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      console.log(`🔌 Connecting to database (Attempt ${i + 1}/${retries})...`);
+      const client = await pool.connect();
+      console.log("✅ Successfully connected to PostgreSQL database!");
+      
+      await initDB(client);
+      client.release();
+      return; // Success
+    } catch (err) {
+      console.error(`❌ Database connection failed: ${err.message}`);
+      if (i < retries - 1) {
+        console.log("⏳ Retrying in 5 seconds...");
+        await new Promise(res => setTimeout(res, 5000));
+      }
+    }
   }
+  console.error("❌ Could not connect to database after multiple attempts. API endpoints requiring DB will fail.");
 };
 
-startApp();
+// Start DB connection in background
+connectDB();
 
 // 2. Initialize Table Schema
 async function initDB(client) {
