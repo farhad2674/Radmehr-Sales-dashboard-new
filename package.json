@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "prestart": "npm run build",
+    "postinstall": "npm run build",
     "start": "node server.js",
     "preview": "vite preview"
   },
@@ -25,12 +25,10 @@
     "better-sqlite3": "^12.5.0",
     "url": "^0.11.4",
     "cors": "^2.8.5",
-    "pg": "^8.18.0"
+    "pg": "^8.18.0",
+    "@types/node": "^22.14.0",
+    "typescript": "~5.8.2"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
   }
 }
