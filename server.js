@@ -1,9 +1,10 @@
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
-import fs from 'fs';
-import Database from 'better-sqlite3';
+import pg from 'pg'; 
 import { fileURLToPath } from 'url';
+
+const { Pool } = pg;
 
 // Reconstruct __dirname for ES Modules
 const __filename = fileURLToPath(import.meta.url);
@@ -16,63 +17,73 @@ app.use(cors());
 // Increase payload limit for large Excel files - essential for 40K records
 app.use(express.json({ limit: '100mb' }));
 
-// Request Logger (Helps debug if requests are actually hitting this server)
+// Request Logger
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// 1. Database Setup (SQLite)
-// We store the DB in a 'data' folder. On Railway, mount a Volume to /app/data to persist this.
-const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
+// 1. Database Setup (PostgreSQL)
 
-if (!fs.existsSync(DATA_DIR)) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    console.log(`✅ Created data directory at: ${DATA_DIR}`);
-  } catch (err) {
-    console.error(`❌ Could not create data directory: ${err.message}`);
+// Helper to determine config
+const getDbConfig = () => {
+  if (process.env.DATABASE_URL) {
+    return { connectionString: process.env.DATABASE_URL };
   }
-}
-
-const DB_PATH = path.join(DATA_DIR, 'cheques.db');
-console.log(`📂 Database Path: ${DB_PATH}`);
-
-let db;
-try {
-  db = new Database(DB_PATH);
-  // Enable WAL mode for better concurrency and performance
-  db.pragma('journal_mode = WAL'); 
-  // Enable Foreign Keys enforcement
-  db.pragma('foreign_keys = ON');
   
-  console.log("✅ Successfully connected to SQLite database!");
-  initDB();
-} catch (err) {
-  console.error("❌ Failed to initialize SQLite database.");
-  console.error(`Error: ${err.message}`);
-}
+  // Fallback to individual variables if DATABASE_URL is not provided
+  return {
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'postgres',
+    port: parseInt(process.env.DB_PORT || '5432'),
+  };
+};
+
+const dbConfig = getDbConfig();
+
+const pool = new Pool({
+  ...dbConfig,
+  // SSL is often required in production cloud environments
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
+
+// Log connection attempt (masking password)
+const hostLog = process.env.DATABASE_URL ? 'DATABASE_URL provided' : dbConfig.host;
+console.log(`🔌 Attempting to connect to PostgreSQL at host: ${hostLog}`);
+
+// Test Connection & Initialize
+pool.connect().then(client => {
+  console.log("✅ Successfully connected to PostgreSQL database!");
+  initDB(client).then(() => client.release());
+}).catch(err => {
+  console.error("❌ Failed to connect to PostgreSQL database.");
+  console.error(`Error Details: ${err.message}`);
+  console.error("Hint: Check your DB_HOST, DB_USER, DB_PASSWORD and ensure the database container is running.");
+});
 
 // 2. Initialize Table Schema
-function initDB() {
+async function initDB(client) {
   try {
-    db.exec(`
+    // Note: In Postgres, use SERIAL for auto-incrementing IDs instead of AUTOINCREMENT
+    await client.query(`
       CREATE TABLE IF NOT EXISTS uploads (
         id TEXT PRIMARY KEY,
         filename TEXT,
-        upload_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        upload_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         record_count INTEGER,
-        total_amount REAL
+        total_amount DOUBLE PRECISION
       );
     `);
 
-    db.exec(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS cheques (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         upload_id TEXT,
         doc_number TEXT,
         series TEXT,
-        amount REAL,
+        amount DOUBLE PRECISION,
         due_date TEXT,
         operation_date TEXT,
         received_from TEXT,
@@ -84,8 +95,9 @@ function initDB() {
       );
     `);
     
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_cheques_upload_id ON cheques(upload_id);`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_cheques_due_date ON cheques(due_date);`);
+    // Creating indexes
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_cheques_upload_id ON cheques(upload_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_cheques_due_date ON cheques(due_date);`);
 
     console.log("✅ Database schema verified.");
   } catch (err) {
@@ -96,17 +108,23 @@ function initDB() {
 // 3. API Endpoints
 
 // Health Check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', database: 'sqlite' });
+app.get('/api/health', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT NOW()');
+    res.json({ status: 'ok', database: 'postgres', time: result.rows[0].now });
+  } catch (e) {
+    res.status(500).json({ status: 'error', error: e.message });
+  }
 });
 
 // GET: Fetch cheques
-app.get('/api/cheques', (req, res) => {
+app.get('/api/cheques', async (req, res) => {
   const { datasetId } = req.query;
   if (!datasetId) return res.json([]);
   
   try {
-    const stmt = db.prepare(`
+    // Postgres uses $1, $2 syntax for parameters
+    const query = `
       SELECT 
         doc_number as "docNumber", 
         series,
@@ -119,13 +137,13 @@ app.get('/api/cheques', (req, res) => {
         bank, 
         description 
        FROM cheques 
-       WHERE upload_id = ? 
+       WHERE upload_id = $1 
        ORDER BY due_date ASC
-    `);
+    `;
     
-    const rows = stmt.all(datasetId);
+    const result = await pool.query(query, [datasetId]);
 
-    const formattedRows = rows.map((r, index) => ({
+    const formattedRows = result.rows.map((r, index) => ({
         ...r, 
         id: `${datasetId}-${index}`,
         amount: Number(r.amount)
@@ -139,7 +157,7 @@ app.get('/api/cheques', (req, res) => {
 });
 
 // POST: Bulk upload cheques
-app.post('/api/cheques/bulk', (req, res) => {
+app.post('/api/cheques/bulk', async (req, res) => {
   const { cheques, datasetId, filename } = req.body;
   
   console.log(`📥 Received bulk upload request for ID: ${datasetId}, Count: ${cheques?.length}`);
@@ -148,52 +166,59 @@ app.post('/api/cheques/bulk', (req, res) => {
     return res.status(400).json({ error: "Invalid Data received" });
   }
 
+  const client = await pool.connect();
+
   try {
-    const runTransaction = db.transaction((data, id, file) => {
-      db.prepare('DELETE FROM uploads WHERE id = ?').run(id);
+    await client.query('BEGIN'); // Start Transaction
 
-      const recordCount = data.length;
-      const totalAmount = data.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+    // Clean up old upload if exists
+    await client.query('DELETE FROM uploads WHERE id = $1', [datasetId]);
 
-      db.prepare(`
-        INSERT INTO uploads (id, filename, record_count, total_amount) 
-        VALUES (?, ?, ?, ?)
-      `).run(id, file || 'Unknown.xlsx', recordCount, totalAmount);
+    const recordCount = cheques.length;
+    const totalAmount = cheques.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
 
-      const insertStmt = db.prepare(`
-        INSERT INTO cheques (
-          upload_id, doc_number, series, amount, due_date, operation_date, 
-          received_from, paid_to, status, bank, description
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
+    // Insert into uploads
+    await client.query(`
+      INSERT INTO uploads (id, filename, record_count, total_amount) 
+      VALUES ($1, $2, $3, $4)
+    `, [datasetId, filename || 'Unknown.xlsx', recordCount, totalAmount]);
 
-      for (const c of data) {
-        insertStmt.run(
-          id,
-          c.docNumber || '',
-          c.series || '',
-          c.amount || 0,
-          c.dueDate || '',
-          c.operationDate || '',
-          c.receivedFrom || '',
-          c.paidTo || '',
-          c.status || '',
-          c.bank || '',
-          c.description || ''
-        );
-      }
-      
-      return recordCount;
-    });
+    // Insert cheques loop
+    const insertQuery = `
+      INSERT INTO cheques (
+        upload_id, doc_number, series, amount, due_date, operation_date, 
+        received_from, paid_to, status, bank, description
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `;
 
-    const count = runTransaction(cheques, datasetId, filename);
-    console.log(`✅ Successfully imported ${count} records.`);
-    res.json({ success: true, count });
+    for (const c of cheques) {
+      await client.query(insertQuery, [
+        datasetId,
+        c.docNumber || '',
+        c.series || '',
+        c.amount || 0,
+        c.dueDate || '',
+        c.operationDate || '',
+        c.receivedFrom || '',
+        c.paidTo || '',
+        c.status || '',
+        c.bank || '',
+        c.description || ''
+      ]);
+    }
+
+    await client.query('COMMIT'); // Commit Transaction
+    
+    console.log(`✅ Successfully imported ${recordCount} records.`);
+    res.json({ success: true, count: recordCount });
 
   } catch (e) {
+    await client.query('ROLLBACK'); // Rollback on error
     console.error("Bulk Upload Error:", e.message);
     res.status(500).json({ error: `Database Error: ${e.message}` });
+  } finally {
+    client.release();
   }
 });
 
@@ -201,8 +226,7 @@ app.post('/api/cheques/bulk', (req, res) => {
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Handle client-side routing for SPA
-// FIX: Express 5 / path-to-regexp v6+ does not support '*' as a wildcard. 
-// We use a regex /.*/ match all remaining routes.
+// Express 5 / path-to-regexp v6+ regex match for all routes
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
@@ -210,5 +234,5 @@ app.get(/.*/, (req, res) => {
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`🚀 Server running on port ${port}`);
-  console.log(`💾 Storage Mode: SQLite (Local)`);
+  console.log(`💾 Storage Mode: PostgreSQL`);
 });
